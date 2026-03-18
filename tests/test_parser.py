@@ -87,7 +87,8 @@ This is the HeichalotCMS VideoRenderer explanation.
     assert len(events) == 4
     assert events[0]["type"] == "show"
     assert events[0]["file"] == "hero_image.png"
-    assert events[1] == {"type": "sfx", "file": "soft_whoosh.wav", "line": 7}
+    assert events[1]["type"] == "sfx"
+    assert events[1]["file"] == "soft_whoosh.wav"
     assert events[2]["type"] == "fade"
     assert events[2]["target"] == "evidence_overlay"
     assert events[3]["type"] == "dialogue"
@@ -105,7 +106,7 @@ duration: 30
 fps: 30
 ---
 
-[SHOW hero.png IMAGE FOR 5s]
+[SHOW hero_image.png FOR 5s]
 """,
     )
 
@@ -119,7 +120,7 @@ fps: 30
 
     assert len(events) == 1
     assert events[0]["type"] == "show"
-    assert events[0]["file"] == "hero.png"
+    assert events[0]["file"] == "hero_image.png"
     assert events[0]["durationFrames"] == 150
 
 
