@@ -228,13 +228,15 @@ def parse_show_tokens(tokens: list[str], fps: int) -> dict[str, Any]:
 
         raise ValueError(f"Unrecognized SHOW token sequence near: {' '.join(tokens[i:])}")
 
+    if duration_frames is None:
+        duration_frames = 30 * fps
+
     event: dict[str, Any] = {
         "type": "show",
         "file": file,
+        "durationFrames": duration_frames,
     }
 
-    if duration_frames is not None:
-        event["durationFrames"] = duration_frames
     if enter is not None:
         event["enter"] = enter
     if leave is not None:
