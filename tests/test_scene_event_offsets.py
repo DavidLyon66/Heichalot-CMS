@@ -8,8 +8,7 @@ from tools.rendervideo import compile_production
 def write_file(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
-
-def test_scene_events_get_sequential_at_frames(tmp_path: Path) -> None:
+def test_untimed_aniboxes_anchor_to_latest_dialogue_start(tmp_path: Path) -> None:
     production_dir = tmp_path / "prod"
     production_dir.mkdir()
 
@@ -64,7 +63,7 @@ Thank you for coming.
     assert events[2]["durationFrames"] == 90
 
     assert events[3]["type"] == "anibox"
-    assert events[3]["atFrames"] == 90
+    assert events[3]["atFrames"] == 0
     assert events[3]["durationFrames"] == 90
 
     assert events[4]["type"] == "dialogue"
