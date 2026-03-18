@@ -792,8 +792,21 @@ def find_candidate_dirs(production_dir: Path) -> list[Path]:
 
 
 def resolve_image_for_target(production_dir: Path, target: str) -> Path:
+    raw = Path(target)
+
+    if raw.is_absolute() and raw.exists():
+        return raw
+
     candidate_dirs = find_candidate_dirs(production_dir)
 
+    # direct relative filename with suffix
+    if raw.suffix:
+        for directory in candidate_dirs:
+            candidate = directory / raw.name
+            if candidate.exists():
+                return candidate
+
+    # basename without extension
     for directory in candidate_dirs:
         for ext in IMAGE_EXTS:
             candidate = directory / f"{target}{ext}"
@@ -804,7 +817,6 @@ def resolve_image_for_target(production_dir: Path, target: str) -> Path:
         f"Could not resolve image target '{target}'. Looked in: "
         + ", ".join(str(d) for d in candidate_dirs)
     )
-
 
 def resolve_sfx_file(production_dir: Path, filename: str) -> Path:
     raw = Path(filename)
@@ -860,7 +872,18 @@ def stage_assets(production_dir: Path, compiled: dict[str, Any], videorender_roo
     for event in compiled.get("events", []):
         event_type = event.get("type")
 
-        if event_type in {"show", "fade", "hold"}:
+        if event_type in {"show", "anibox"}:
+            filename = event.get("file")
+            if not isinstance(filename, str) or not filename:
+                continue
+
+            if filename not in staged_images:
+                src = resolve_image_for_target(production_dir, filename)
+                dst = public_images / src.name
+                copy_if_needed(src, dst)
+                staged_images[filename] = f"images/{src.name}"
+
+        elif event_type in {"fade", "hold"}:
             target = event.get("target")
             if not isinstance(target, str) or not target:
                 continue
@@ -932,7 +955,7 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Compile and optionally render a production video")
     parser.add_argument("production_dir", help="Path to the production directory")
     parser.add_argument("--dry-run", action="store_true", help="Print compiled JSON to stdout")
-    parser.add_argument("--render", action="store_true", help="Run Remotion after compiling")
+    parser.add_argument("--render", action="store_true", default=True, help="Run Remotion after compiling")
     parser.add_argument("--output-dir", action="store_true", help="Write rendered video into ./output directory instead of CWD",)
     parser.add_argument("--output", help="Explicit output file path (overrides default behavior)", )
     parser.add_argument("--composition", default="VideoFromJSON", help="Remotion composition ID (default: VideoFromJSON)", )
