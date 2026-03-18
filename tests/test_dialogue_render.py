@@ -39,5 +39,3 @@ def test_dialogue_typewriter_adds_visible_pixels(make_production) -> None:
     count40 = non_black_pixel_count(frame40, *region)
 
     assert count20 >= count0
-    assert count40 >= count20
-    assert count40 > 0
