@@ -37,10 +37,26 @@ def test_parse_transcript_ignores_preamble_before_first_prompt():
     assert blocks == [("Actual question", "Actual answer")]
 
 
+def test_parse_transcript_merges_multiline_prompt_continuations():
+    text = (
+        ">>> let's remote-view the conference at Niecaea where they decided which books w\n"
+        "... ould be included and which books not. Let's first get an overall picture of\n"
+        "... the setting.\n"
+        "Okay, fantastic!\n"
+    )
+    blocks = mod.parse_transcript(text)
+    assert blocks == [
+        (
+            "let's remote-view the conference at Niecaea where they decided which books would be included and which books not. Let's first get an overall picture of the setting.",
+            "Okay, fantastic!",
+        )
+    ]
+
+
 def test_render_blocks_formats_story_sections():
     blocks = [("Question", "Answer")]
     rendered = mod.render_blocks(blocks)
-    assert rendered == '"""Narrator\nQuestion\n\n"""Ai\nAnswer\n'
+    assert rendered == '"""Narrator\nQuestion\n"""\n\n"""Ai\nAnswer\n"""\n'
 
 
 def test_ensure_tags_creates_file_with_tags_when_missing(tmp_path):
@@ -79,17 +95,17 @@ def test_ensure_tags_appends_tags_only_once(tmp_path):
 def test_append_story_appends_text_with_spacing(tmp_path):
     path = tmp_path / "story.md"
     path.write_text("header\n", encoding="utf-8")
-    mod.append_story(path, '"""Narrator\nQ\n\n"""Ai\nA\n')
+    mod.append_story(path, '"""Narrator\nQ\n"""\n\n"""Ai\nA\n"""\n')
     assert path.read_text(encoding="utf-8") == (
-        'header\n\n"""Narrator\nQ\n\n"""Ai\nA\n\n'
+        'header\n\n"""Narrator\nQ\n"""\n\n"""Ai\nA\n"""\n\n'
     )
 
 
 def test_append_story_creates_parent_directories(tmp_path):
     path = tmp_path / "nested" / "story.md"
-    mod.append_story(path, '"""Narrator\nQ\n\n"""Ai\nA\n')
+    mod.append_story(path, '"""Narrator\nQ\n"""\n\n"""Ai\nA\n"""\n')
     assert path.read_text(encoding="utf-8") == (
-        '\n"""Narrator\nQ\n\n"""Ai\nA\n\n'
+        '\n"""Narrator\nQ\n"""\n\n"""Ai\nA\n"""\n\n'
     )
 
 
@@ -112,7 +128,7 @@ def test_write_debate_creates_timestamped_file(tmp_path, monkeypatch):
 
     monkeypatch.setattr(mod, "datetime", FakeDateTime)
 
-    mod.write_debate('"""Narrator\nQ\n\n"""Ai\nA\n')
+    mod.write_debate('"""Narrator\nQ\n"""\n\n"""Ai\nA\n"""\n')
 
     debate_file = tmp_path / "debate" / "2026-03-19_02-17-44.md"
     assert debate_file.exists()
@@ -121,7 +137,7 @@ def test_write_debate_creates_timestamped_file(tmp_path, monkeypatch):
         "origin: addaistorytext\n"
         "timestamp: 2026-03-19T02:17:44\n"
         "---\n\n"
-        '"""Narrator\nQ\n\n"""Ai\nA\n'
+        '"""Narrator\nQ\n"""\n\n"""Ai\nA\n"""\n'
     )
 
 
@@ -196,15 +212,19 @@ def test_main_writes_to_story_override_path(tmp_path, monkeypatch, capsys):
         '"""Tags\n'
         'remote-viewing\n\n'
         '\n"""Narrator\n'
-        'First question\n\n'
+        'First question\n'
+        '"""\n\n'
         '"""Ai\n'
-        'First answer\n\n'
+        'First answer\n'
+        '"""\n\n'
         '"""Narrator\n'
-        'Second question\n\n'
+        'Second question\n'
+        '"""\n\n'
         '"""Ai\n'
-        'Second answer\n\n'
+        'Second answer\n'
+        '"""\n\n'
+    )
 
-)
 
 def test_main_reads_from_stdin_when_no_file(tmp_path, monkeypatch, capsys):
     story_path = tmp_path / "story.md"
@@ -231,9 +251,11 @@ def test_main_reads_from_stdin_when_no_file(tmp_path, monkeypatch, capsys):
     assert f"Appended 1 block(s) to {story_path}" in out
     assert story_path.read_text(encoding="utf-8") == (
         '\n"""Narrator\n'
-        'Clipboard question\n\n'
+        'Clipboard question\n'
+        '"""\n\n'
         '"""Ai\n'
-        'Clipboard answer\n\n'
+        'Clipboard answer\n'
+        '"""\n\n'
     )
 
 
@@ -285,6 +307,6 @@ def test_main_debate_mode_ignores_story_override(tmp_path, monkeypatch, capsys):
 
     mod.main()
 
-    assert called["text"] == '"""Narrator\nQ\n\n"""Ai\nA\n'
+    assert called["text"] == '"""Narrator\nQ\n"""\n\n"""Ai\nA\n"""\n'
     assert not story_path.exists()
     _ = capsys.readouterr()
