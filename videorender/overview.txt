@@ -1,0 +1,54 @@
+docs/
+│
+├── index.md
+│
+├── introduction.md
+├── philosophy.md
+├── architecture.md
+│
+├── archivist-workflow.md
+├── story-format.md
+├── cms-structure.md
+│
+├── tools/
+│   ├── createentry.md
+│   ├── importbasemap.md
+│   ├── building-extraction.md
+│   ├── rendercontext.md
+│   └── exportstatic.md
+│
+├── scenes/
+│   ├── scene-format.md
+│   ├── threejs-viewer.md
+│   └── exporting-scenes.md
+│
+├── mapping/
+│   ├── basemap-calibration.md
+│   ├── px-to-meter-scaling.md
+│   ├── map-orientation.md
+│   └── gps-alignment.md
+│
+├── modelling/
+│   ├── blender-workflow.md
+│   ├── low-poly-architecture.md
+│   └── automatic-building-extraction.md
+│
+├── languages/
+│   ├── unicode-support.md
+│   ├── hebrew-support.md
+│   └── japanese-support.md
+│
+├── testing/
+│   ├── regression-tests.md
+│   ├── cms-tests.md
+│   └── geometry-tests.md
+│
+├── ai-analysis/
+│   ├── ai-debate.md
+│   ├── comparing-historical-entries.md
+│   └── reproducible-history.md
+│
+└── appendix/
+    ├── file-formats.md
+    ├── design-decisions.md
+    └── roadmap.md

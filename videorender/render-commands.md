@@ -1,0 +1,37 @@
+SHOW
+SHOW <file>
+SHOW <file> FOR <time>
+
+SHOW <file> ENTER FADE
+SHOW <file> ENTER ZOOM
+SHOW <file> ENTER SLIDE
+SHOW <file> ENTER FADE FROM BLACK
+
+SHOW <file> LEAVE FADE
+SHOW <file> LEAVE ZOOM
+SHOW <file> LEAVE SLIDE
+SHOW <file> LEAVE FADE TO BLACK
+
+SHOW <file> FOR <time> ENTER <...>
+SHOW <file> FOR <time> LEAVE <...>
+
+SHOW <file> FOR <time> MOTION ZOOM IN
+SHOW <file> FOR <time> MOTION ZOOM OUT
+SHOW <file> FOR <time> MOTION SCROLL UP
+SHOW <file> FOR <time> MOTION SCROLL DOWN
+ANIBOX
+ANIBOX <file>
+ANIBOX <file> FOR <time>
+ANIBOX <file> STARTING <time>
+ANIBOX <file> STARTING <time> FOR <time>
+
+ANIBOX <file> ENTER FADE
+ANIBOX <file> ENTER ZOOM
+ANIBOX <file> ENTER SLIDE
+
+ANIBOX <file> LEAVE FADE
+ANIBOX <file> LEAVE ZOOM
+ANIBOX <file> LEAVE SLIDE
+
+ANIBOX <file> STARTING <time> FOR <time> ENTER <...>
+ANIBOX <file> STARTING <time> FOR <time> LEAVE <...>
