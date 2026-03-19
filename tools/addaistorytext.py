@@ -64,24 +64,33 @@ def parse_transcript(text):
     lines = text.splitlines()
 
     blocks = []
-    narrator = None
+    narrator_text = None
     ai_lines = []
+    in_ai = False
 
     for line in lines:
         stripped = line.strip()
 
         if stripped.startswith(">>>"):
-            if narrator is not None:
-                blocks.append((narrator.strip(), "\n".join(ai_lines).strip()))
-                ai_lines = []
+            if narrator_text is not None:
+                blocks.append((narrator_text.strip(), "\n".join(ai_lines).strip()))
 
-            narrator = stripped[3:].strip()
-        else:
-            if narrator is not None:
-                ai_lines.append(line)
+            narrator_text = stripped[3:].strip()
+            ai_lines = []
+            in_ai = False
+            continue
 
-    if narrator is not None:
-        blocks.append((narrator.strip(), "\n".join(ai_lines).strip()))
+        if stripped.startswith("...") and narrator_text is not None and not in_ai:
+            continuation = stripped[3:].lstrip()
+            narrator_text = append_continuation(narrator_text, continuation)
+            continue
+
+        if narrator_text is not None:
+            in_ai = True
+            ai_lines.append(line)
+
+    if narrator_text is not None:
+        blocks.append((narrator_text.strip(), "\n".join(ai_lines).strip()))
 
     return blocks
 
@@ -92,9 +101,11 @@ def render_blocks(blocks):
     for narrator, ai in blocks:
         out.append('"""Narrator')
         out.append(narrator)
+        out.append('"""')
         out.append("")
         out.append('"""Ai')
         out.append(ai)
+        out.append('"""')
         out.append("")
 
     return "\n".join(out)
@@ -142,6 +153,22 @@ def append_story(path, text):
         f.write("\n")
         f.write(text)
         f.write("\n")
+
+def append_continuation(base, continuation):
+    if not base:
+        return continuation
+
+    if not continuation:
+        return base
+
+    trailing_token = base.split()[-1] if base.split() else ""
+
+    # If the line wrapped in the middle of a word, the trailing token
+    # is often just 1 character, e.g. "w" + "ould"
+    if len(trailing_token) == 1:
+        return base + continuation
+
+    return base + " " + continuation
 
 
 def write_debate(text):
