@@ -61,6 +61,17 @@ TRIPLE_QUOTE = '"""'
 IMAGE_EXTS = [".png", ".jpg", ".jpeg", ".webp", ".svg"]
 SFX_EXTS = [".wav", ".mp3", ".aac", ".m4a", ".ogg"]
 
+VALID_ZOOM_CURVES = {
+    "linear",
+    "ease_in",
+    "ease_out",
+    "ease_in_out",
+    "strong_ease_in",
+    "strong_ease_out",
+    "strong_ease_in_out",
+}
+
+ZOOM_RANGE_RE = re.compile(r"^([0-9]+(?:\.[0-9]+)?)\->([0-9]+(?:\.[0-9]+)?)$")
 
 def eprint(*args: object) -> None:
     print(*args, file=sys.stderr)
@@ -121,8 +132,11 @@ def split_duration_clause(tokens: list[str]) -> tuple[list[str], dict[str, Any] 
 def parse_show_tokens(tokens: list[str], fps: int) -> dict[str, Any]:
     """
     Parse:
-        SHOW route-map.png FOR 5s ENTER FADE FROM BLACK LEAVE FADE TO BLACK
-        SHOW route-map.png FOR 5s MOTION ZOOM IN
+      SHOW route-map.png FOR 5s
+      SHOW route-map.png FOR 5s ENTER FADE FROM BLACK LEAVE FADE TO BLACK
+      SHOW route-map.png FOR 5s MOTION ZOOM IN
+      SHOW route-map.png FOR 60s ZOOM 1.0->1.2
+      SHOW route-map.png FOR 60s ZOOM 1.0->1.2 CURVE ease_in_out
     """
     if not tokens:
         raise ValueError("SHOW cue missing filename")
@@ -134,6 +148,9 @@ def parse_show_tokens(tokens: list[str], fps: int) -> dict[str, Any]:
     enter: dict[str, Any] | None = None
     leave: dict[str, Any] | None = None
     motion: dict[str, Any] | None = None
+    zoom_start: float | None = None
+    zoom_end: float | None = None
+    zoom_curve: str | None = None
 
     while i < len(tokens):
         token = tokens[i].upper()
@@ -145,10 +162,43 @@ def parse_show_tokens(tokens: list[str], fps: int) -> dict[str, Any]:
             i += 2
             continue
 
+        if token == "ZOOM":
+            if i + 1 >= len(tokens):
+                raise ValueError("SHOW ZOOM missing range")
+
+            m = ZOOM_RANGE_RE.fullmatch(tokens[i + 1])
+            if not m:
+                raise ValueError(
+                    f"Invalid SHOW ZOOM range: {tokens[i + 1]} "
+                    f"(expected like 1.0->1.2)"
+                )
+
+            zoom_start = float(m.group(1))
+            zoom_end = float(m.group(2))
+            zoom_curve = "linear"
+            i += 2
+            continue
+
+        if token == "CURVE":
+            if zoom_start is None or zoom_end is None:
+                raise ValueError("SHOW CURVE may only be used after ZOOM")
+            if i + 1 >= len(tokens):
+                raise ValueError("SHOW CURVE missing curve name")
+
+            candidate = tokens[i + 1].lower()
+            if candidate not in VALID_ZOOM_CURVES:
+                raise ValueError(
+                    f"Unsupported SHOW CURVE: {tokens[i + 1]}. "
+                    f"Valid options: {', '.join(sorted(VALID_ZOOM_CURVES))}"
+                )
+
+            zoom_curve = candidate
+            i += 2
+            continue
+
         if token == "ENTER":
             if i + 1 >= len(tokens):
                 raise ValueError("SHOW ENTER missing mode")
-
             mode = tokens[i + 1].lower()
 
             if mode == "fade":
@@ -174,7 +224,6 @@ def parse_show_tokens(tokens: list[str], fps: int) -> dict[str, Any]:
         if token == "LEAVE":
             if i + 1 >= len(tokens):
                 raise ValueError("SHOW LEAVE missing mode")
-
             mode = tokens[i + 1].lower()
 
             if mode == "fade":
@@ -243,8 +292,13 @@ def parse_show_tokens(tokens: list[str], fps: int) -> dict[str, Any]:
         event["leave"] = leave
     if motion is not None:
         event["motion"] = motion
+    if zoom_start is not None:
+        event["zoomStart"] = zoom_start
+        event["zoomEnd"] = zoom_end
+        event["zoomCurve"] = zoom_curve or "linear"
 
     return event
+
 
 def parse_anibox_tokens(tokens: list[str], fps: int) -> dict[str, Any]:
     """
@@ -623,6 +677,9 @@ def build_scenes_from_events(events: list[dict[str, Any]]) -> list[dict[str, Any
                     **({"enter": event["enter"]} if "enter" in event else {}),
                     **({"leave": event["leave"]} if "leave" in event else {}),
                     **({"motion": event["motion"]} if "motion" in event else {}),
+                    **({"zoomStart": event["zoomStart"]} if "zoomStart" in event else {}),
+                    **({"zoomEnd": event["zoomEnd"]} if "zoomEnd" in event else {}),
+                    **({"zoomCurve": event["zoomCurve"]} if "zoomCurve" in event else {}),
                     **({"line": event["line"]} if "line" in event else {}),
                 },
                 "durationFrames": duration_frames,
