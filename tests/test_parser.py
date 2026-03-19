@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tools.rendervideo import compile_production
-
+from tools.rendervideo import compile_production, parse_show_tokens
 
 def write_file(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
@@ -278,3 +277,74 @@ Thank you for coming.
     assert event["speaker"] == "NARRATOR"
     assert event["text"] == "Thank you for coming."
     assert event["durationFrames"] == 45
+
+def test_parse_show_basic():
+    event = parse_show_tokens(["background.png", "FOR", "60s"], 30)
+    assert event["type"] == "show"
+    assert event["file"] == "background.png"
+    assert event["durationFrames"] == 1800
+    assert "zoomStart" not in event
+    assert "zoomEnd" not in event
+    assert "zoomCurve" not in event
+
+
+def test_parse_show_zoom_defaults_to_linear():
+    event = parse_show_tokens(
+        ["background.png", "FOR", "60s", "ZOOM", "1.0->1.2"],
+        30,
+    )
+    assert event["zoomStart"] == 1.0
+    assert event["zoomEnd"] == 1.2
+    assert event["zoomCurve"] == "linear"
+
+
+def test_parse_show_zoom_with_curve():
+    event = parse_show_tokens(
+        ["background.png", "FOR", "60s", "ZOOM", "1.0->1.2", "CURVE", "ease_in_out"],
+        30,
+    )
+    assert event["zoomStart"] == 1.0
+    assert event["zoomEnd"] == 1.2
+    assert event["zoomCurve"] == "ease_in_out"
+
+import pytest
+
+@pytest.mark.parametrize("curve_name", [
+    "linear",
+    "ease_in",
+    "ease_out",
+    "ease_in_out",
+    "strong_ease_in",
+    "strong_ease_out",
+    "strong_ease_in_out",
+])
+def test_parse_show_zoom_supported_curves(curve_name):
+    event = parse_show_tokens(
+        ["background.png", "FOR", "60s", "ZOOM", "1.0->1.2", "CURVE", curve_name],
+        30,
+    )
+    assert event["zoomCurve"] == curve_name
+
+
+def test_parse_show_curve_without_zoom_rejected():
+    with pytest.raises(ValueError, match="CURVE"):
+        parse_show_tokens(
+            ["background.png", "FOR", "60s", "CURVE", "ease_in_out"],
+            30,
+        )
+
+
+def test_parse_show_bad_zoom_range_rejected():
+    with pytest.raises(ValueError, match="Invalid SHOW ZOOM range"):
+        parse_show_tokens(
+            ["background.png", "FOR", "60s", "ZOOM", "hello"],
+            30,
+        )
+
+
+def test_parse_show_unknown_curve_rejected():
+    with pytest.raises(ValueError, match="Unsupported SHOW CURVE"):
+        parse_show_tokens(
+            ["background.png", "FOR", "60s", "ZOOM", "1.0->1.2", "CURVE", "banana"],
+            30,
+        )
