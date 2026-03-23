@@ -80,9 +80,19 @@ export const Dialogue: React.FC<DialogueProps> = ({speaker, text, style}) => {
   const frame = useCurrentFrame();
   const {fps} = useVideoConfig();
 
-  const words = text.trim().split(/\s+/).filter(Boolean);
-  const totalWords = words.length;
+  const lines = text.split('\n');
 
+  const countWordsInLine = (line: string): number => {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      return 0;
+    }
+    return trimmed.split(/\s+/).length;
+  };
+
+  const totalWords = lines.reduce((sum, line) => {
+    return sum + countWordsInLine(line);
+  }, 0);
   const fontFamily = style?.fontFamily ?? 'Georgia, serif';
   const fontSize = style?.fontSize ?? 52;
   const color = style?.color ?? '#ffffff';
@@ -141,7 +151,7 @@ export const Dialogue: React.FC<DialogueProps> = ({speaker, text, style}) => {
       : 0;
 
   const currentWordIndex = getWordIndex(frame, fps, wordTiming, totalWords);
-  const visibleWords = words.slice(0, currentWordIndex + 1);
+  const visibleWordCount = currentWordIndex + 1;
 
   const alignItems =
     align === 'left' ? 'flex-start' : align === 'right' ? 'flex-end' : 'center';
@@ -227,6 +237,7 @@ export const Dialogue: React.FC<DialogueProps> = ({speaker, text, style}) => {
             </>
           ) : null}
 
+         {speaker && speaker.trim() ? (
           <div
             style={{
               position: 'relative',
@@ -243,6 +254,7 @@ export const Dialogue: React.FC<DialogueProps> = ({speaker, text, style}) => {
           >
             {speaker}
           </div>
+        ) : null}
 
           <div
             style={{
@@ -251,84 +263,122 @@ export const Dialogue: React.FC<DialogueProps> = ({speaker, text, style}) => {
               width: '100%',
             }}
           >
-            <div
+                        <div
               style={{
                 fontFamily,
                 fontSize,
                 color,
                 lineHeight: 1.35,
                 textAlign: align,
-                whiteSpace: 'normal',
+                whiteSpace: 'pre-line',
                 textShadow: '0 2px 12px rgba(0,0,0,0.65)',
-                display: 'flex',
-                flexWrap: 'wrap',
-                justifyContent,
-                gap: '0.25em',
                 position: 'relative',
                 zIndex: 1,
                 opacity,
+                width: '100%',
               }}
             >
-              {visibleWords.map((word, i) => {
-                const isCurrent = i === currentWordIndex;
+              {(() => {
+                let consumedWords = 0;
 
-                return (
-                  <span
-                    key={`${word}-${i}`}
-                    style={{
-                      position: 'relative',
-                      display: 'inline-block',
-                      fontSize: isCurrent
-                        ? fontSize + currentWordFontSizeAdjust
-                        : fontSize,
-                      lineHeight: 1.2,
-                    }}
-                  >
-                    {isCurrent && highlightEnabled ? (
-                      highlightImage ? (
-                        <span
-                          style={{
-                            position: 'absolute',
-                            left: -padLeft,
-                            right: -padRight,
-                            top: -padTop,
-                            bottom: -padBottom,
-                            opacity: highlightOpacity,
-                            zIndex: 0,
-                            overflow: 'hidden',
-                            borderRadius: 2,
-                          }}
-                        >
-                          <Img
-                            src={staticFile(highlightImage)}
+                return lines.map((line, lineIndex) => {
+                  const trimmed = line.trim();
+
+                  if (!trimmed) {
+                    return (
+                      <div
+                        key={`line-${lineIndex}`}
+                        style={{
+                          minHeight: `${fontSize * 1.35}px`,
+                        }}
+                      />
+                    );
+                  }
+
+                  const wordsInLine = trimmed.split(/\s+/);
+
+                  const renderedLine = (
+                    <div
+                      key={`line-${lineIndex}`}
+                      style={{
+                        display: 'block',
+                        textAlign: align,
+                        marginBottom: 0,
+                      }}
+                    >
+                      {wordsInLine.map((word, wordIndexInLine) => {
+                        const globalWordIndex = consumedWords + wordIndexInLine;
+                        const isVisible = globalWordIndex < visibleWordCount;
+                        const isCurrent = globalWordIndex === currentWordIndex;
+
+                        return (
+                          <span
+                            key={`${lineIndex}-${wordIndexInLine}-${word}`}
                             style={{
-                              width: '100%',
-                              height: '100%',
-                              objectFit: 'cover',
+                              position: 'relative',
+                              display: 'inline-block',
+                              fontSize: isCurrent
+                                ? fontSize + currentWordFontSizeAdjust
+                                : fontSize,
+                              lineHeight: 1.2,
+                              opacity: isVisible ? 1 : 0,
+                              marginRight: '0.25em',
                             }}
-                          />
-                        </span>
-                      ) : (
-                        <span
-                          style={{
-                            position: 'absolute',
-                            left: -padLeft,
-                            right: -padRight,
-                            top: -padTop,
-                            bottom: -padBottom,
-                            backgroundColor: highlightColor,
-                            opacity: highlightOpacity,
-                            zIndex: 0,
-                            borderRadius: 2,
-                          }}
-                        />
-                      )
-                    ) : null}
+                          >
+                            {isCurrent && highlightEnabled ? (
+                              highlightImage ? (
+                                <span
+                                  style={{
+                                    position: 'absolute',
+                                    left: -padLeft,
+                                    right: -padRight,
+                                    top: -padTop,
+                                    bottom: -padBottom,
+                                    opacity: highlightOpacity,
+                                    zIndex: 0,
+                                    overflow: 'hidden',
+                                    borderRadius: 2,
+                                  }}
+                                >
+                                  <Img
+                                    src={staticFile(highlightImage)}
+                                    style={{
+                                      width: '100%',
+                                      height: '100%',
+                                      objectFit: 'cover',
+                                    }}
+                                  />
+                                </span>
+                              ) : (
+                                <span
+                                  style={{
+                                    position: 'absolute',
+                                    left: -padLeft,
+                                    right: -padRight,
+                                    top: -padTop,
+                                    bottom: -padBottom,
+                                    backgroundColor: highlightColor,
+                                    opacity: highlightOpacity,
+                                    zIndex: 0,
+                                    borderRadius: 2,
+                                  }}
+                                />
+                              )
+                            ) : null}
 
-                    <span style={{position: 'relative', zIndex: 1}}>{word}</span>
-                  </span>
-                );
-              })}
+                            <span style={{position: 'relative', zIndex: 1}}>
+                              {word}
+                            </span>
+                          </span>
+                        );
+                      })}
+                    </div>
+                  );
+
+                  consumedWords += wordsInLine.length;
+                  return renderedLine;
+                });
+              })()}
             </div>
 
             {style?.textMaskImage ? (
