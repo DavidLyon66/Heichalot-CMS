@@ -31,6 +31,7 @@ type RenderEvent =
   | {type: 'sfx'; file: string}
   | {type: 'hold'; target: string}
   | {type: 'anibox'; file: string; enter?: string; leave?: string}
+  | {type: 'transition'; name: string; mode?: 'builtin' | 'custom'; durationFrames?: number}
   | {type: string; [key: string]: unknown};
 
 export const SceneFactory: React.FC<{event: RenderEvent}> = ({event}) => {
@@ -72,6 +73,9 @@ export const SceneFactory: React.FC<{event: RenderEvent}> = ({event}) => {
         );
       }
       return <AniBox file={event.file} />;
+
+    case 'transition':
+      return null;
 
     default:
       return (
