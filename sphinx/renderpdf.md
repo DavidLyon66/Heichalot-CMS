@@ -1,7 +1,6 @@
-# renderhtml.py
+# renderpdf.py
 
-`renderhtml.py` renders a `story.md` entry into clean HTML for quick browser viewing or
-embedding into another web system.
+`renderpdf.py` renders a `story.md` entry into a readable PDF using ReportLab.
 
 It is designed for fast production use in Heichalot-CMS and supports both dialogue-style
 stories and plain prose stories.
@@ -10,14 +9,14 @@ stories and plain prose stories.
 
 - Uses the current directory as the default input when no path is given
 - Writes output beside the entry, not into an `output/` subdirectory
-- Uses the story title as the default HTML filename
+- Uses the story title as the default PDF filename
 - Supports both:
   - dialogue stories with triple-quoted speaker blocks
   - prose stories with normal paragraphs after the title
 - Automatically inserts an illustration image under the title
+- Supports optional heading color palettes
+- Supports optional image alignment and height
 - Displays front-matter fields under the title
-- Supports fragment mode for embedding into a larger site
-- Supports inline image syntax resolved from `entry/images/`
 
 ## Supported story formats
 
@@ -68,10 +67,10 @@ The term "Moro" was used by Spanish and American colonizers.
 
 ## Default behavior
 
-When run with no arguments, `renderhtml.py` uses the current working directory:
+When run with no arguments, `renderpdf.py` uses the current working directory:
 
 ```bash
-python3 tools/renderhtml.py
+python3.9 ../../tools/renderpdf.py
 ```
 
 It looks for:
@@ -83,13 +82,13 @@ It looks for:
 and writes:
 
 ```text
-./<Story Title>.html
+./<Story Title>.pdf
 ```
 
 If no title is found, it falls back to:
 
 ```text
-./story.html
+./story.pdf
 ```
 
 ## Illustration image behavior
@@ -109,12 +108,25 @@ If multiple non-explicit images exist, no fallback image is chosen.
 
 ## Header fields under the title
 
-By default, `renderhtml.py` reads the YAML/front matter field names and displays only the
+By default, `renderpdf.py` reads the YAML/front matter field names and displays only the
 ones that have meaningful values.
 
 This means the script does not hardcode a fixed default field list.
 
-These are prettified when shown in the HTML, for example:
+Example:
+
+```md
+---
+entry_id: entry-0000022
+created_utc: 2026-04-01T11:03:55Z
+location_text: Philippines
+datetime: 1870-01-01
+status: Draft
+source: History and Description of Our Philippine Wonderland
+---
+```
+
+These are prettified when shown in the PDF, for example:
 
 - `location_text` → `Location`
 - `created_utc` → `Created`
@@ -128,95 +140,51 @@ To reduce the displayed fields, use:
 
 This acts as a filter, not an expansion.
 
-## Inline images
-
-Inline images are supported only with a filename, not a path.
-
-Supported forms:
-
-```md
-![Caption](image1.jpg)
-![Caption](image1.jpg){height=240 align=right}
-```
-
-Rules:
-
-- no paths are allowed
-- filename matching is exact
-- images are resolved only from:
-
-```text
-entry-<x>/images/
-```
-
-So:
-
-```md
-![Old Photograph](family.jpg)
-```
-
-maps to:
-
-```text
-images/family.jpg
-```
-
-If the image file is not found, it is silently skipped.
-
-## Fragment mode
-
-By default, `renderhtml.py` writes a full HTML page.
-
-To output only the inner article fragment, use:
-
-```bash
-python3 tools/renderhtml.py --fragment
-```
-
-This is useful when developers want to embed the generated content inside their own web
-template and manage headers, footers, CSS, and navigation in their own system.
-
 ## Command-line options
 
 ### Basic usage
 
 ```bash
-python3 tools/renderhtml.py
-python3 tools/renderhtml.py .
-python3 tools/renderhtml.py /path/to/story.md
-python3 tools/renderhtml.py /path/to/entry-dir
+python3.9 ../../tools/renderpdf.py
+python3.9 ../../tools/renderpdf.py .
+python3.9 ../../tools/renderpdf.py /path/to/story.md
+python3.9 ../../tools/renderpdf.py /path/to/entry-dir
 ```
 
 ### Custom output filename
 
 ```bash
-python3 tools/renderhtml.py . my-output.html
+python3.9 ../../tools/renderpdf.py . my-output.pdf
 ```
 
-### Fragment output
+### Image height
 
 ```bash
-python3 tools/renderhtml.py --fragment
+python3.9 ../../tools/renderpdf.py --image-height-mm 70
 ```
+
+### Image alignment
+
+```bash
+python3.9 ../../tools/renderpdf.py --image-align left
+python3.9 ../../tools/renderpdf.py --image-align center
+python3.9 ../../tools/renderpdf.py --image-align right
+```
+
+### Heading colors
+
+Provide a comma-separated list of hex RGB colors:
+
+```bash
+python3.9 ../../tools/renderpdf.py --heading-colors "#223344,#553377,#aa2244"
+```
+
+These colors are cycled through speaker headings in dialogue mode.
 
 ### Header fields filter
 
 ```bash
-python3 tools/renderhtml.py --header-fields "location_text,source"
-```
-
-### Illustration image size
-
-```bash
-python3 tools/renderhtml.py --image-height-px 320
-```
-
-### Illustration image alignment
-
-```bash
-python3 tools/renderhtml.py --image-align left
-python3 tools/renderhtml.py --image-align center
-python3 tools/renderhtml.py --image-align right
+python3.9 ../../tools/renderpdf.py --header-fields "location_text,source"
 ```
 
 ## Output naming
@@ -232,31 +200,37 @@ For example:
 becomes:
 
 ```text
-Giro Giro of Mount Isa.html
+Giro Giro of Mount Isa.pdf
 ```
 
 Illegal filename characters are removed. If no title is found, the fallback is:
 
 ```text
-story.html
+story.pdf
 ```
 
 ## Notes
 
-- `renderhtml.py` is intentionally simple and semantic.
-- It does not try to be a complete Markdown engine.
-- CSS styling is expected to be handled by the consuming system when used in fragment mode.
+- The script includes a compatibility shim for some Python/OpenSSL/ReportLab builds
+  where `hashlib.md5(usedforsecurity=False)` is not supported.
+- For reliable ReportLab execution, use the same Python interpreter for both install and run.
+  Example:
+
+```bash
+python3.9 -m pip install reportlab
+python3.9 ../../tools/renderpdf.py
+```
 
 ## Tests
 
 A matching pytest file is provided as:
 
 ```text
-tests/test_renderhtml.py
+tests/test_renderpdf.py
 ```
 
 Suggested run command:
 
 ```bash
-python3 -m pytest tests/test_renderhtml.py
+python3.9 -m pytest tests/test_renderpdf.py
 ```
