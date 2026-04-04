@@ -18,14 +18,16 @@ def extract_video_id(url_or_id):
 
     raise ValueError("Could not extract video ID from input.")
 
+
 def fetch_transcript(video_id):
     api = YouTubeTranscriptApi()
     transcript = api.fetch(video_id)
     return [entry.text for entry in transcript]
 
 
-def transcript_to_story_md(video_id, lines):
-    title = f"YouTube Import ({video_id})"
+def transcript_to_story_md(video_id, lines, title=None):
+    if title is None:
+        title = f"YouTube Import ({video_id})"
 
     body = "\n\n".join(lines)
 
@@ -44,20 +46,26 @@ source_video_id: {video_id}
 \"\"\"
 """
 
-def write_story(out_dir, story_md):
+def write_story(out_dir, story_md, new_title):
+
     os.makedirs(out_dir, exist_ok=True)
     path = os.path.join(out_dir, "story.md")
+
+    existing_title = read_existing_title(path)
+
+    # Decide which title to use
+    if existing_title and existing_title != "Title":
+        title_to_use = existing_title
+    else:
+        title_to_use = new_title
+
+    # Replace title inside generated content
+    story_md = replace_title(story_md, title_to_use)
 
     with open(path, "w", encoding="utf-8") as f:
         f.write(story_md)
 
     return path
-
-
-def fetch_transcript(video_id):
-    api = YouTubeTranscriptApi()
-    transcript = api.fetch(video_id)
-    return [entry.text for entry in transcript]
 
 
 def clean_transcript_lines(lines):
@@ -184,10 +192,36 @@ def split_emotion_cues(lines):
     return out
 
 
+def read_existing_title(path):
+    if not os.path.exists(path):
+        return None
+
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("# "):
+                    return line[2:].strip()
+    except Exception:
+        return None
+
+    return None
+
+
+def replace_title(story_md, title):
+    lines = story_md.splitlines()
+
+    for i, line in enumerate(lines):
+        if line.startswith("# "):
+            lines[i] = f"# {title}"
+            break
+
+    return "\n".join(lines)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Minimal YouTube → CMS importer")
     parser.add_argument("input", help="YouTube URL or video ID")
-    parser.add_argument("out", help="Output directory")
+    parser.add_argument("out", default='.', help="Output directory")
 
     args = parser.parse_args()
 
@@ -197,13 +231,13 @@ def main():
 
         video_id = extract_video_id(args.input)
         print(f"[INFO] Video ID: {video_id}")
-
+       
+        title = f"YouTube Import ({video_id})"
         lines = fetch_transcript(video_id)
         cleaned = clean_transcript_lines(lines)
         split_lines = split_emotion_cues(cleaned)
         paragraphs = merge_lines_into_paragraphs(split_lines)
         paragraphs = wrap_paragraphs(paragraphs, width=60)
-
 
         print(f"[INFO] Transcript lines {len(lines)} converted to {len(paragraphs)} paragraphs.")
 
@@ -212,9 +246,9 @@ def main():
             diarize = registry.get_capability("diarization")
             story_md = diarize(audio_path)
         else:
-            story_md = transcript_to_story_md(video_id, paragraphs)
+            story_md = transcript_to_story_md(video_id, paragraphs, title=title)
 
-        path = write_story(args.out, story_md)
+        path = write_story(args.out, story_md, title)
         print(f"[OK] Written: {path}")
 
     except Exception as e:
