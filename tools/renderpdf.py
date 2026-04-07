@@ -60,42 +60,69 @@ def parse_story(text):
     body = re.sub(r"^# .+\n?", "", body_plus, count=1, flags=re.MULTILINE).strip()
     return metadata, title, [("", body)] if body else []
 
+
 def parse_slides(text):
     front_matter_text, body = strip_front_matter(text)
     metadata = parse_front_matter(front_matter_text)
+
     chunks = re.split(r'^\s*---\s*$', body, flags=re.MULTILINE)
     slides = []
+
     for chunk in chunks:
         lines = [l.rstrip() for l in chunk.splitlines() if l.strip()]
         if not lines:
             continue
-        title = None
+
+        title_lines = []
         content_lines = []
+
         for line in lines:
-            if title is None and line.startswith("# "):
-                title = line[2:].strip()
+            if line.startswith("# "):
+                title_lines.append(line[2:].strip())
             else:
                 content_lines.append(line)
-        if title is None:
-            title = content_lines[0].strip() if content_lines else "Slide"
-            content_lines = content_lines[1:] if content_lines else []
-        slide = {"title": title, "image": None, "background": None, "bullets": [], "body": []}
+
+        if not title_lines:
+            if content_lines:
+                title_lines = [content_lines[0].strip()]
+                content_lines = content_lines[1:]
+            else:
+                title_lines = ["Slide"]
+
+        slide = {
+            "title": title_lines[0],
+            "title_lines": title_lines,
+            "image": None,
+            "background": None,
+            "bullets": [],
+            "body": [],
+        }
+
         for line in content_lines:
             parsed = parse_inline_image(line)
             if parsed:
                 caption, filename, opts = parsed
-                img_def = {"caption": caption, "filename": filename, "opts": opts}
+                img_def = {
+                    "caption": caption,
+                    "filename": filename,
+                    "opts": opts,
+                }
+
                 if opts.get("background") and slide["background"] is None:
                     slide["background"] = img_def
                     continue
+
                 if slide["image"] is None:
                     slide["image"] = img_def
                     continue
+
             if line.startswith("* ") or line.startswith("- "):
                 slide["bullets"].append(line[2:].strip())
             else:
                 slide["body"].append(line.strip())
+
         slides.append(slide)
+
     title = metadata.get("title") if isinstance(metadata.get("title"), str) and metadata.get("title").strip() else "slides"
     return metadata, title, slides
 
@@ -328,8 +355,23 @@ def build_slide_flowables(deck_title, slides, story_path, slide_config=None):
             if bg_path: bg_image = bg_path
         if bg_image:
             flow.append(BackgroundImage(bg_image, dim=background_dim))
-        flow.append(Paragraph(markup_inline(slide["title"]), slide_title))
-        flow.append(Spacer(1, 8))
+        title_lines = slide.get("title_lines") or [slide["title"]]
+
+        for i, tline in enumerate(title_lines):
+            if i == 0:
+                style = slide_title
+            else:
+                style = ParagraphStyle(
+                    f"SlideSubtitle_{idx}_{i}",
+                    parent=slide_title,
+                    fontSize=slide_title.fontSize * 0.7,
+                    leading=slide_title.leading * 0.8,
+                    spaceAfter=4,
+                )
+            flow.append(Paragraph(markup_inline(tline), style))
+
+        flow.append(Spacer(1, 8))        
+
         image = None
         image_align = "center"
         img_def = slide.get("image")
