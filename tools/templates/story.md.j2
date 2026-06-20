@@ -1,29 +1,43 @@
 ---
 entry_id: {{ entry_id }}
 created_utc: {{ created_utc }}
+kind: {{ kind }}
 
+{% if location_text %}
 location_text: {{ location_text }}
+{% endif %}
+{% if year %}
 year: {{ year }}
 datetime: {{ datetime }}
+{% endif %}
 
 status: Draft
-tags: []
 
+{% if kind == "remote_viewing" %}
+tags: ["remote-viewing"]
+{% elif kind == "historic_site" %}
+tags: ["historic-site"]
+{% else %}
+tags: []
+{% endif %}
+
+{% if kind == "historic_site" %}
 base_map: {{ base_map or "" }}
 images: {}
 generated_assets: {}
 
-px_to_m: [1.0, 1.0]              # metres per pixel [x, z]
-map_orientation_deg: 0           # clockwise rotation of the map into world space
+px_to_m: [1.0, 1.0]
+map_orientation_deg: 0
 
-base_map_centre_px: [0, 0]       # pixel coordinate mapped to world [0,0]
-main_feature_centre_px: [0, 0]   # anchor feature pixel location
+base_map_centre_px: [0, 0]
+main_feature_centre_px: [0, 0]
 
 main_feature_gps:
   lat: 0
   lon: 0
+{% endif %}
 ---
 
-# Title
+# {{ title }}
 
 Write the story here.
