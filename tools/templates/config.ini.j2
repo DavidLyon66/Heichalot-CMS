@@ -1,0 +1,37 @@
+[cms]
+project_root = {{ project_root }}
+cms_dir = {{ cms_dir }}
+current_entry =
+last_id = 0
+story_filename = story.md
+
+[paths]
+data_dir = {{ data_dir }}
+download_dir = {{ download_dir }}
+cache_dir = {{ cache_dir }}
+
+[server]
+public_url = https://heichalot.tech/cms/public/
+subscriber_url = https://heichalot.tech/cms/subscriber/
+channel = public
+email =
+
+[new_entry]
+entry_prefix = entry-
+pad_width = 7
+default_kind = note
+default_title = Title
+template = story.md.j2
+
+[entry_types]
+n = note
+rv = remote_viewing
+v = video
+st = historic_site
+i = image
+m = music
+s = song
+yt = youtube
+
+[addaistory]
+image_mode = move
