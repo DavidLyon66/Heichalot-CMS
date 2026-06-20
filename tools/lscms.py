@@ -31,7 +31,11 @@ from dataclasses import dataclass, asdict
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Iterable, List, Optional, Sequence, Tuple
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
 
+console = Console()
 CONFIG_PATH = Path("~/.heichalotcms/config.ini").expanduser()
 ENTRY_RE = re.compile(r"^entry-(\d+)$")
 YAML_KEY_RE = re.compile(r"^([A-Za-z0-9_-]+)\s*:\s*(.*)$")
@@ -50,6 +54,7 @@ TRACKED_SUBDIRS = ["assets", "debate"]
 class EntryInfo:
     entry_id: str
     path: str
+    type_code: str
     title: str
     last_activity_iso: str
     last_activity_epoch: float
@@ -344,14 +349,19 @@ def fmt_iso(epoch: float) -> str:
         return "1970-01-01 00:00"
     return datetime.fromtimestamp(epoch).strftime("%Y-%m-%d %H:%M")
 
+def build_entry_info(
+    entry_dir: Path,
+    current_entry: Optional[str],
+    type_map: dict[str, str],
+    ) -> EntryInfo:
 
-def build_entry_info(entry_dir: Path, current_entry: Optional[str]) -> EntryInfo:
     modified = choose_activity_timestamp(entry_dir)
     created = choose_created_timestamp(entry_dir)
     entry_id = entry_dir.name
     return EntryInfo(
         entry_id=entry_id,
         path=str(entry_dir),
+        type_code=extract_type(entry_dir, type_map),
         title=extract_title(entry_dir),
         last_activity_iso=fmt_iso(modified),
         last_activity_epoch=modified,
@@ -378,25 +388,96 @@ def sort_entries(entries: List[EntryInfo], sort_key: str) -> List[EntryInfo]:
     return sorted(entries, key=lambda e: (e.last_activity_epoch, e.entry_id), reverse=True)
 
 
-def render_text(entries: List[EntryInfo], long_output: bool, sort_key: str) -> str:
-    if not entries:
-        return "No matching CMS entries found."
-
-    lines: List[str] = []
-    for e in entries:
-        marker = "*" if e.current else " "
-        when = e.created_iso if sort_key == "created" else e.last_activity_iso
-        lines.append(f"{marker} {e.entry_id}  {when}  {e.title}")
-        if long_output:
-            marker_text = ", ".join(e.markers) if e.markers else "-"
-            lines.append(f"    markers: {marker_text}")
-            lines.append(f"    path:    {e.path}")
-    return "\n".join(lines)
-
-
 def render_json(entries: List[EntryInfo]) -> str:
     return json.dumps([asdict(e) for e in entries], indent=2)
 
+def render_rich(entries: List[EntryInfo], long_output: bool, sort_key: str, cms_dir: Path) -> None:
+    if not entries:
+        console.print(Panel("[yellow]No matching CMS entries found.[/yellow]", title="Heichalot-CMS Entries"))
+        return
+
+    table = Table(show_header=True)
+    table.add_column("Entry")
+    table.add_column("When")
+    table.add_column("Type")
+    table.add_column("Title")
+
+    if long_output:
+        table.add_column("Markers")
+        table.add_column("Path")
+
+    for e in entries:
+        when = e.created_iso if sort_key == "created" else e.last_activity_iso
+        row = [
+            e.entry_id,
+            when,
+            e.type_code,
+            e.title,
+        ]
+
+        if long_output:
+            row.extend([
+                ", ".join(e.markers) if e.markers else "-",
+                e.path,
+            ])
+
+        table.add_row(*row)
+
+    console.print()
+    console.print(
+        Panel(
+            table,
+            title=f"Heichalot-CMS Entries — {len(entries)} shown",
+            subtitle=str(cms_dir),
+            expand=False,
+        )
+    )
+
+def extract_type(entry_dir: Path, type_map: dict[str, str]) -> str:
+    story = entry_dir / "story.md"
+    if not story.exists():
+        return "?"
+
+    try:
+        lines = story.read_text(encoding="utf-8").splitlines()
+    except Exception:
+        return "?"
+
+    if not lines or lines[0].strip() != "---":
+        return "?"
+
+    values: dict[str, str] = {}
+
+    for line in lines[1:]:
+        if line.strip() == "---":
+            break
+        if ":" not in line:
+            continue
+
+        key, value = line.split(":", 1)
+        values[key.strip().lower()] = value.strip().strip('"').strip("'")
+
+    raw_kind = (
+        values.get("type")
+        or values.get("kind")
+        or ""
+    ).strip().lower()
+
+    if not raw_kind:
+        return "?"
+
+    return type_map.get(raw_kind, raw_kind)
+
+def load_entry_type_map(cfg):
+    out = {}
+
+    if not cfg.has_section("entry_types"):
+        return out
+
+    for short_name, long_name in cfg.items("entry_types"):
+        out[long_name.strip().lower()] = short_name.strip()
+
+    return out
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)
@@ -410,15 +491,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     cfg = load_config(CONFIG_PATH)
     cms_dir = resolve_cms_dir(args, cfg)
     current_entry = get_current_entry(cfg)
+    type_map = load_entry_type_map(cfg)
 
-    entries = [build_entry_info(entry_dir, current_entry) for entry_dir in iter_entry_dirs(cms_dir)]
+    entries = [
+        build_entry_info(entry_dir, current_entry, type_map)
+        for entry_dir in iter_entry_dirs(cms_dir)
+    ]
     entries = filter_by_days(entries, args.days, args.by)
     entries = sort_entries(entries, args.by)[: args.limit]
 
     if args.json:
         print(render_json(entries))
     else:
-        print(render_text(entries, args.long_output, args.by))
+        render_rich(entries, args.long_output, args.by, cms_dir)        
 
     return 0
 
