@@ -378,6 +378,28 @@ def ensure_directories(cfg: configparser.ConfigParser, config_path: Optional[Pat
     paths.download_dir.mkdir(parents=True, exist_ok=True)
     paths.cms_dir.mkdir(parents=True, exist_ok=True)
 
+def resolve_config_path(config_path: Optional[str | Path] = None) -> Path:
+    if config_path:
+        return expand_path(config_path)
+    return default_config_path()
+
+
+def load_app_config(
+    config_path: Optional[str | Path] = None,
+    *,
+    setup_if_missing: bool = True,
+) -> tuple[configparser.ConfigParser, Path, HeichalotPaths]:
+    cfg_path = resolve_config_path(config_path)
+
+    if setup_if_missing:
+        cfg = ensure_config(cfg_path)
+    else:
+        cfg = read_config(cfg_path)
+        ensure_config_defaults(cfg)
+
+    paths = resolve_paths(cfg, cfg_path)
+    return cfg, cfg_path, paths
+
 def legacy_config_paths() -> list[Path]:
     if os.name == "nt":
         appdata = os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")
@@ -479,13 +501,12 @@ def show_config_status(config_path: Optional[Path] = None) -> None:
         console.print("  [bold]heichalot-config --setup[/bold]")
 
 
-def get_cms_dir(cfg: configparser.ConfigParser) -> Path:
-    return resolve_paths(cfg).cms_dir
+def get_cms_dir(cfg: configparser.ConfigParser, config_path: Optional[Path] = None) -> Path:
+    return resolve_paths(cfg, config_path).cms_dir
 
 
-def get_project_root(cfg: configparser.ConfigParser) -> Path:
-    return resolve_paths(cfg).project_root
-
+def get_project_root(cfg: configparser.ConfigParser, config_path: Optional[Path] = None) -> Path:
+    return resolve_paths(cfg, config_path).project_root
 
 def get_story_filename(cfg: configparser.ConfigParser) -> str:
     return get_value(cfg, "cms", "story_filename", "story.md")
@@ -493,6 +514,21 @@ def get_story_filename(cfg: configparser.ConfigParser) -> str:
 
 def get_current_entry(cfg: configparser.ConfigParser) -> str:
     return get_value(cfg, "cms", "current_entry", "")
+
+def get_template_path(cfg: configparser.ConfigParser, template_name: Optional[str] = None) -> Path:
+    name = template_name or get_value(cfg, "new_entry", "template", "story.md.j2")
+    return template_dir() / name
+
+
+def get_entry_prefix(cfg: configparser.ConfigParser) -> str:
+    return get_value(cfg, "new_entry", "entry_prefix", "entry-")
+
+
+def get_entry_pad_width(cfg: configparser.ConfigParser) -> int:
+    try:
+        return cfg.getint("new_entry", "pad_width", fallback=7)
+    except ValueError:
+        return 7
 
 
 def set_current_entry(
