@@ -3,8 +3,8 @@
 List recent Heichalot-CMS entries.
 
 Default behavior:
-- Reads ~/.heichalotcms/config.ini
-- Uses [cms] cms_dir from config unless overridden
+- Uses tools/config.py to find config.ini
+- Uses [cms] cms_dir from config unless overridden with --cms
 - Scans entry-* directories
 - Computes a "last activity" timestamp from meaningful content files
 - Extracts a human title from story.md (or other root .md files)
@@ -15,7 +15,7 @@ Examples:
     python3 tools/lscms.py --limit 20
     python3 tools/lscms.py --days 14
     python3 tools/lscms.py --long
-    python3 tools/lscms.py --cms-dir ~/heichalot-tech/cms
+    python3 tools/lscms.py --cms ~/heichalot-tech/cms
     python3 tools/lscms.py --json
 """
 
@@ -30,13 +30,20 @@ import sys
 from dataclasses import dataclass, asdict
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Iterable, List, Optional, Sequence, Tuple
+from typing import Iterable, List, Optional, Sequence
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+TOOLS_DIR = REPO_ROOT / "tools"
+
+sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(TOOLS_DIR))
+
+from config import load_app_config
+
 console = Console()
-CONFIG_PATH = Path("~/.heichalotcms/config.ini").expanduser()
 ENTRY_RE = re.compile(r"^entry-(\d+)$")
 YAML_KEY_RE = re.compile(r"^([A-Za-z0-9_-]+)\s*:\s*(.*)$")
 
@@ -47,7 +54,7 @@ ROOT_PRIORITY_FILES = [
     "video.md",
 ]
 ROOT_CONTENT_EXTENSIONS = {".md", ".txt", ".json", ".yaml", ".yml"}
-TRACKED_SUBDIRS = ["assets", "debate"]
+TRACKED_SUBDIRS = ["images", "assets", "debate"]
 
 
 @dataclass
@@ -71,8 +78,15 @@ def eprint(*args: object) -> None:
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="List recent Heichalot-CMS entries")
     parser.add_argument(
+        "--cms",
         "--cms-dir",
-        help="Path to cms directory (overrides config.ini)",
+        dest="cms_dir",
+        help="Path to CMS directory (overrides config.ini).",
+    )
+    parser.add_argument(
+        "--config",
+        default=None,
+        help="Optional override path to config.ini.",
     )
     parser.add_argument(
         "--limit",
@@ -106,25 +120,10 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def load_config(path: Path) -> configparser.ConfigParser:
-    cfg = configparser.ConfigParser()
-    if path.exists():
-        cfg.read(path)
-    return cfg
-
-
-def resolve_cms_dir(args: argparse.Namespace, cfg: configparser.ConfigParser) -> Path:
+def resolve_cms_dir(args: argparse.Namespace, paths) -> Path:
     if args.cms_dir:
         return Path(args.cms_dir).expanduser().resolve()
-
-    try:
-        cms_dir = cfg.get("cms", "cms_dir")
-    except (configparser.NoSectionError, configparser.NoOptionError):
-        raise SystemExit(
-            "Could not determine cms_dir. Pass --cms-dir or set [cms] cms_dir in ~/.heichalotcms/config.ini"
-        )
-
-    return Path(cms_dir).expanduser().resolve()
+    return paths.cms_dir
 
 
 def get_current_entry(cfg: configparser.ConfigParser) -> Optional[str]:
@@ -488,8 +487,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         eprint("--days must be >= 0")
         return 2
 
-    cfg = load_config(CONFIG_PATH)
-    cms_dir = resolve_cms_dir(args, cfg)
+    cfg, cfg_path, paths = load_app_config(args.config)
+    cms_dir = resolve_cms_dir(args, paths)
     current_entry = get_current_entry(cfg)
     type_map = load_entry_type_map(cfg)
 
