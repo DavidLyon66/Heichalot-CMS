@@ -180,6 +180,15 @@ def fetch_json(url: str, opener) -> Dict[str, Any]:
     except json.JSONDecodeError as exc:
         raise UpdateCMSError(f"Invalid JSON received from {url}: {exc}") from exc
 
+def flush_allowed(cfg) -> bool:
+    if not cfg.has_section("updatecms"):
+        return False
+
+    return cfg.getboolean(
+        "updatecms",
+        "flush_allowed",
+        fallback=False,
+    )
 
 def download_file(url: str, dest_path: Path, opener) -> None:
     request = Request(url, headers={"User-Agent": "Heichalot-CMS-Updater/0.2"})
@@ -248,6 +257,48 @@ def validate_zip_entries(extract_dir: Path, entry_start_id: int) -> list[Path]:
 
     return entry_dirs
 
+def select_required_downloads(
+    manifest: dict,
+    local_archive_date: str | None = None,
+    flush: bool = False,
+) -> list[str]:
+    latest_full = manifest.get("latest_full")
+    updates = sorted(
+        manifest.get("updates", []),
+        key=lambda row: row.get("date", ""),
+    )
+
+    if flush or local_archive_date is None:
+        files = []
+
+        if latest_full:
+            files.append(latest_full["file"])
+            start_date = latest_full["date"]
+        else:
+            start_date = ""
+
+        files.extend(
+            row["file"]
+            for row in updates
+            if row.get("date", "") > start_date
+        )
+        return files
+
+    return [
+        row["file"]
+        for row in updates
+        if row.get("date", "") > local_archive_date
+    ]
+
+def is_flush_allowed(cfg) -> bool:
+    if not cfg.has_section("updatecms"):
+        return False
+
+    return cfg.getboolean(
+        "updatecms",
+        "flush_allowed",
+        fallback=False,
+    )
 
 def install_release(entry_dirs: list[Path], cms_dir: Path) -> None:
     cms_dir.mkdir(parents=True, exist_ok=True)
@@ -258,6 +309,28 @@ def install_release(entry_dirs: list[Path], cms_dir: Path) -> None:
             shutil.rmtree(target)
         shutil.copytree(source, target)
 
+def delete_downloaded_entries(
+    cms_dir: Path,
+    entry_start_id: int = DOWNLOADED_ENTRY_START_ID,
+) -> list[str]:
+    deleted = []
+
+    if not cms_dir.exists():
+        return deleted
+
+    for path in sorted(cms_dir.iterdir()):
+        if not path.is_dir():
+            continue
+
+        entry_num = parse_entry_number(path.name)
+        if entry_num is None:
+            continue
+
+        if entry_num >= entry_start_id:
+            shutil.rmtree(path)
+            deleted.append(path.name)
+
+    return deleted
 
 def print_release_info(release: ReleaseInfo, latest_url: str, zip_url: str, cms_dir: Path) -> None:
     print()
@@ -272,20 +345,39 @@ def print_release_info(release: ReleaseInfo, latest_url: str, zip_url: str, cms_
         print(f"Notes:            {release.notes}")
 
 
-def run_update(config_path: Optional[str], update_url: Optional[str], force: bool, dry_run: bool) -> int:
+def run_update(
+    config_path: Optional[str],
+    update_url: Optional[str],
+    force: bool,
+    dry_run: bool,
+    flush: bool = False,
+) -> int:
     cfg, cfg_path, paths = load_app_config(config_path)
 
     base_url, latest_url = latest_url_from_base(get_configured_update_url(cfg, update_url))
     opener = build_url_opener()
 
     latest_data = fetch_json(latest_url, opener)
-    release = ReleaseInfo.from_dict(latest_data)
-    zip_url = resolve_zip_url(base_url, release.zip_url)
-
-    print_release_info(release, latest_url, zip_url, paths.cms_dir)
 
     local_version = read_local_version(paths.data_dir)
-    if local_version == release.version and not force:
+    selected_files = select_required_downloads(
+        latest_data,
+        local_archive_date=local_version,
+        flush=flush,
+    )
+
+    print()
+    print("Heichalot-CMS updater")
+    print("---------------------")
+    print(f"Latest URL:       {latest_url}")
+    print(f"Install CMS dir:  {paths.cms_dir}")
+    print(f"Local version:    {local_version or '(none)'}")
+    print(f"Required files:   {len(selected_files)}")
+
+    for filename in selected_files:
+        print(f"  - {filename}")
+
+    if not selected_files and not force:
         print()
         print("CMS data is already up to date.")
         return 0
@@ -295,37 +387,113 @@ def run_update(config_path: Optional[str], update_url: Optional[str], force: boo
         print("Dry run only. No files downloaded or installed.")
         return 0
 
-    with tempfile.TemporaryDirectory(prefix="updatecms_") as tmpdir_str:
-        tmpdir = Path(tmpdir_str)
-        zip_path = tmpdir / "cms_release.zip"
-        extract_dir = tmpdir / "extracted"
-        extract_dir.mkdir(parents=True, exist_ok=True)
+    if flush:
+        if not is_flush_allowed(cfg):
+            raise UpdateCMSError(
+                "Flush is disabled. Set [updatecms] flush_allowed=true "
+                "in config.ini to permit deletion of downloaded CMS entries."
+            )
+
+        deleted = delete_downloaded_entries(
+            paths.cms_dir,
+            entry_start_id=DOWNLOADED_ENTRY_START_ID,
+        )
 
         print()
-        print(f"Downloading release from: {zip_url}")
-        download_file(zip_url, zip_path, opener)
+        print(f"Flush deleted {len(deleted)} downloaded CMS entr{'y' if len(deleted) == 1 else 'ies'}.")
 
-        print("Extracting zip...")
-        try:
-            with zipfile.ZipFile(zip_path, "r") as zf:
-                zf.extractall(extract_dir)
-        except zipfile.BadZipFile as exc:
-            raise UpdateCMSError(f"Downloaded file is not a valid zip: {zip_path}") from exc
+    install_selected_archives(
+        selected_files,
+        base_url,
+        opener,
+        paths.cms_dir,
+        entry_start_id=DOWNLOADED_ENTRY_START_ID,
+    )
 
-        print("Validating package...")
-        entry_dirs = validate_zip_entries(extract_dir, release.entry_start_id)
-
-        print(f"Installing into: {paths.cms_dir}")
-        install_release(entry_dirs, paths.cms_dir)
-
-    write_local_version(paths.data_dir, release, latest_url, zip_url)
+    write_local_manifest_version(
+        paths.data_dir,
+        latest_data,
+        latest_url,
+        selected_files,
+    )
 
     print()
-    print(f"CMS update complete. Installed version {release.version}.")
+    print(f"CMS update complete. Installed version {latest_manifest_date(latest_data)}.")
     return 0
 
 
+def write_local_manifest_version(
+    data_dir: Path,
+    manifest: dict,
+    latest_url: str,
+    downloaded_files: list[str],
+) -> None:
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    data = {
+        "version": latest_manifest_date(manifest),
+        "latest_url": latest_url,
+        "downloaded_files": downloaded_files,
+    }
+
+    version_path(data_dir).write_text(
+        json.dumps(data, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+def latest_manifest_date(manifest: dict) -> str:
+    dates = []
+
+    latest_full = manifest.get("latest_full")
+    if latest_full:
+        dates.append(latest_full["date"])
+
+    dates.extend(row["date"] for row in manifest.get("updates", []))
+
+    return max(dates) if dates else ""
+
+def install_selected_archives(
+    selected_files: list[str],
+    base_url: str,
+    opener,
+    cms_dir: Path,
+    entry_start_id: int = DOWNLOADED_ENTRY_START_ID,
+) -> None:
+    with tempfile.TemporaryDirectory(prefix="updatecms_") as tmpdir_str:
+        tmpdir = Path(tmpdir_str)
+
+        for filename in selected_files:
+            zip_url = resolve_zip_url(base_url, filename)
+            zip_path = tmpdir / filename
+            extract_dir = tmpdir / f"extracted-{filename}"
+            extract_dir.mkdir(parents=True, exist_ok=True)
+
+            print()
+            print(f"Downloading release from: {zip_url}")
+            download_file(zip_url, zip_path, opener)
+
+            print("Extracting zip...")
+            try:
+                with zipfile.ZipFile(zip_path, "r") as zf:
+                    zf.extractall(extract_dir)
+            except zipfile.BadZipFile as exc:
+                raise UpdateCMSError(f"Downloaded file is not a valid zip: {zip_path}") from exc
+
+            print("Validating package...")
+            entry_dirs = validate_zip_entries(extract_dir, entry_start_id)
+
+            print(f"Installing into: {cms_dir}")
+            install_release(entry_dirs, cms_dir)
+
 def main() -> int:
+    parser.add_argument(
+        "--flush",
+        action="store_true",
+        help=(
+            "Clears all CMS entries in the 1,000,000+ range before downloading. "
+        ),
+    )
+
     parser = build_arg_parser()
     args = parser.parse_args()
 
@@ -335,7 +503,9 @@ def main() -> int:
             update_url=args.url,
             force=args.force,
             dry_run=args.dry_run,
+            flush=args.flush,
         )
+
     except KeyboardInterrupt:
         print("\nUpdate cancelled.")
         return 1
