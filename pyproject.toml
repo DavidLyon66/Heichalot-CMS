@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "heichalot-cms"
+version = "0.1.0"
+description = "Tools for creating, publishing, updating, and serving Heichalot CMS content."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+  { name = "David Lyon" }
+]
+dependencies = [
+  "requests>=2.31.0",
+  "PyYAML>=6.0.1",
+  "Jinja2>=3.1.0",
+  "rich>=13.7.0",
+  "python-dateutil>=2.9.0"
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0.0"
+]
+
+[project.scripts]
+heichalot-update = "tools.updatecms:main"
+heichalot-server = "tools.server:main"
+heichalot-create-entry = "tools.createentry:main"
+heichalot-alter-entry = "tools.alterentry:main"
+heichalot-publish-entry = "tools.publishentry:main"
+heichalot-config = "tools.config:main"
+heichalot-list = "tools.lscms:main"
+heichalot-search = "tools.searchcms:main"
+
+[tool.setuptools]
+packages = ["tools"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
