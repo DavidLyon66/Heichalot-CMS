@@ -2,22 +2,22 @@
 """
 updatecms.py
 
-Downloads the latest public or subscriber CMS data release from heichalot.tech
-and installs it into the local CMS data area.
+Download the latest Heichalot-CMS release selected by the server and install it
+into the configured local CMS directory.
 
-Current design goals:
-- keep logic simple
-- downloaded CMS entries are separate from user-generated entries
-- downloaded entries begin at entry_id >= 1000000
-- public and subscriber releases are stored separately
-- each release is distributed as a zip file
+The client does not need to know whether it is receiving free, members, or
+premium content. It asks the server for one manifest:
+
+    https://heichalot.tech/cms/latest.json
+
+The server decides which stream is appropriate and returns a manifest pointing
+to the correct archive.
 """
 
 from __future__ import annotations
 
-import getpass
+import argparse
 import json
-import os
 import shutil
 import sys
 import tempfile
@@ -27,26 +27,26 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin
-from urllib.request import Request, build_opener, HTTPBasicAuthHandler, HTTPPasswordMgrWithDefaultRealm
+from urllib.request import Request, build_opener
 
+# Allow running directly from tools/ before package installation.
+REPO_ROOT = Path(__file__).resolve().parents[1]
+TOOLS_DIR = REPO_ROOT / "tools"
+sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(TOOLS_DIR))
 
-BASE_PUBLIC_URL = "https://heichalot.tech/cms/public/"
-BASE_SUBSCRIBER_URL = "https://heichalot.tech/cms/subscriber/"
+try:
+    from config import load_app_config
+except Exception as exc:  # pragma: no cover - user-facing startup error
+    raise SystemExit(
+        "ERROR: Could not import tools/config.py. Run from the Heichalot-CMS "
+        "repository or install the package with: pip install -e ."
+    ) from exc
 
+DEFAULT_UPDATE_URL = "https://heichalot.tech/cms/"
 LATEST_JSON_NAME = "latest.json"
 DOWNLOADED_ENTRY_START_ID = 1_000_000
-
-# Simple early-stage auth.
-# Later this can be replaced by per-user tokens, certs, signed URLs, etc.
-SUBSCRIBER_USERNAME = "subscriber"
-SUBSCRIBER_PASSWORD = "A9F3-3A-5Q-37-X8C1"
-
-# Local storage layout.
-DEFAULT_LOCAL_DATA_ROOT = Path("cms_data")
-PUBLIC_DIRNAME = "public"
-SUBSCRIBER_DIRNAME = "subscriber"
-ENTRIES_DIRNAME = "entries"
-VERSION_FILENAME = "version.json"
+VERSION_FILENAME = "updatecms-version.json"
 
 
 class UpdateCMSError(Exception):
@@ -67,7 +67,11 @@ class ReleaseInfo:
         if "zip_url" not in data:
             raise UpdateCMSError("latest.json is missing required field: zip_url")
 
-        entry_start_id = int(data.get("entry_start_id", DOWNLOADED_ENTRY_START_ID))
+        try:
+            entry_start_id = int(data.get("entry_start_id", DOWNLOADED_ENTRY_START_ID))
+        except (TypeError, ValueError) as exc:
+            raise UpdateCMSError("latest.json field entry_start_id must be an integer") from exc
+
         if entry_start_id < DOWNLOADED_ENTRY_START_ID:
             raise UpdateCMSError(
                 f"entry_start_id must be >= {DOWNLOADED_ENTRY_START_ID}, got {entry_start_id}"
@@ -81,63 +85,95 @@ class ReleaseInfo:
         )
 
 
-def prompt_user_email() -> str:
-    print("Heichalot-CMS updater")
-    print("---------------------")
-    print("Press Enter for the free public CMS data.")
-    print("Enter your email to try subscriber CMS data.")
-    print()
-    return input("Email: ").strip()
-
-
-def choose_channel(email: str) -> str:
-    return "subscriber" if email else "public"
-
-
-def get_channel_url(channel: str) -> str:
-    if channel == "public":
-        return BASE_PUBLIC_URL
-    if channel == "subscriber":
-        return BASE_SUBSCRIBER_URL
-    raise UpdateCMSError(f"Unknown channel: {channel}")
-
-
-def get_channel_local_dir(data_root: Path, channel: str) -> Path:
-    dirname = PUBLIC_DIRNAME if channel == "public" else SUBSCRIBER_DIRNAME
-    return data_root / dirname
-
-
-def make_url(base_url: str, name: str) -> str:
-    return urljoin(base_url, name)
-
-
-def build_url_opener(channel: str):
-    """
-    Build a urllib opener.
-    Public channel uses no auth.
-    Subscriber channel uses simple global HTTP Basic Auth for now.
-    """
-    if channel == "public":
-        return build_opener()
-
-    password_mgr = HTTPPasswordMgrWithDefaultRealm()
-    password_mgr.add_password(
-        realm=None,
-        uri=BASE_SUBSCRIBER_URL,
-        user=SUBSCRIBER_USERNAME,
-        passwd=SUBSCRIBER_PASSWORD,
+def build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Download and install the latest Heichalot-CMS content release."
     )
-    auth_handler = HTTPBasicAuthHandler(password_mgr)
-    return build_opener(auth_handler)
+    parser.add_argument("--config", help="Optional override path to config.ini")
+    parser.add_argument(
+        "--url",
+        default=None,
+        help=(
+            "Base update URL or direct latest.json URL. "
+            f"Default: {DEFAULT_UPDATE_URL}"
+        ),
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Install even when the local version already matches latest.json.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Fetch latest.json and show what would be installed, but do not download or extract.",
+    )
+    return parser
+
+
+def get_configured_update_url(cfg, explicit_url: Optional[str]) -> str:
+    if explicit_url:
+        return explicit_url.strip()
+
+    if cfg.has_section("server"):
+        for key in ("update_url", "cms_update_url", "base_url"):
+            value = cfg.get("server", key, fallback="").strip()
+            if value:
+                return value
+
+    return DEFAULT_UPDATE_URL
+
+
+def latest_url_from_base(value: str) -> tuple[str, str]:
+    """
+    Return (base_url, latest_url).
+
+    The caller may pass either:
+      https://heichalot.tech/cms/
+    or:
+      https://heichalot.tech/cms/latest.json
+    """
+    if not value:
+        value = DEFAULT_UPDATE_URL
+
+    if value.endswith("latest.json"):
+        latest_url = value
+        base_url = value.rsplit("/", 1)[0] + "/"
+    else:
+        base_url = value if value.endswith("/") else value + "/"
+        latest_url = urljoin(base_url, LATEST_JSON_NAME)
+
+    return base_url, latest_url
+
+
+def resolve_zip_url(base_url: str, zip_url: str) -> str:
+    if zip_url.lower().startswith(("http://", "https://")):
+        return zip_url
+
+    # New server design: latest.json may say "cms-YYYY-MM-DD.zip" while
+    # Flask serves archives from /cms/archive/<filename>.
+    if "/" not in zip_url and "\\" not in zip_url:
+        return urljoin(base_url, f"archive/{zip_url}")
+
+    return urljoin(base_url, zip_url)
+
+
+def build_url_opener():
+    return build_opener()
 
 
 def fetch_json(url: str, opener) -> Dict[str, Any]:
-    request = Request(url, headers={"User-Agent": "Heichalot-CMS-Updater/0.1"})
+    request = Request(url, headers={"User-Agent": "Heichalot-CMS-Updater/0.2"})
     try:
         with opener.open(request, timeout=30) as response:
             raw = response.read().decode("utf-8")
         return json.loads(raw)
     except HTTPError as exc:
+        if exc.code == 404:
+            raise UpdateCMSError(
+                f"No CMS release manifest was found at {url}. "
+                "The server may not have published latest.json yet."
+            ) from exc
         raise UpdateCMSError(f"HTTP error fetching JSON from {url}: {exc.code} {exc.reason}") from exc
     except URLError as exc:
         raise UpdateCMSError(f"Network error fetching JSON from {url}: {exc.reason}") from exc
@@ -146,7 +182,7 @@ def fetch_json(url: str, opener) -> Dict[str, Any]:
 
 
 def download_file(url: str, dest_path: Path, opener) -> None:
-    request = Request(url, headers={"User-Agent": "Heichalot-CMS-Updater/0.1"})
+    request = Request(url, headers={"User-Agent": "Heichalot-CMS-Updater/0.2"})
     try:
         with opener.open(request, timeout=60) as response, dest_path.open("wb") as out_file:
             shutil.copyfileobj(response, out_file)
@@ -156,113 +192,108 @@ def download_file(url: str, dest_path: Path, opener) -> None:
         raise UpdateCMSError(f"Network error downloading {url}: {exc.reason}") from exc
 
 
-def read_local_version(channel_dir: Path) -> Optional[str]:
-    version_path = channel_dir / VERSION_FILENAME
-    if not version_path.exists():
-        return None
+def version_path(data_dir: Path) -> Path:
+    return data_dir / VERSION_FILENAME
 
+
+def read_local_version(data_dir: Path) -> Optional[str]:
+    path = version_path(data_dir)
+    if not path.exists():
+        return None
     try:
-        data = json.loads(version_path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
         version = data.get("version")
         return str(version) if version is not None else None
     except Exception:
         return None
 
 
-def write_local_version(channel_dir: Path, release: ReleaseInfo) -> None:
-    version_path = channel_dir / VERSION_FILENAME
+def write_local_version(data_dir: Path, release: ReleaseInfo, latest_url: str, zip_url: str) -> None:
+    data_dir.mkdir(parents=True, exist_ok=True)
     data = {
         "version": release.version,
         "entry_start_id": release.entry_start_id,
         "notes": release.notes,
+        "latest_url": latest_url,
+        "zip_url": zip_url,
     }
-    version_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    version_path(data_dir).write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
-def validate_zip_entries(extract_dir: Path, entry_start_id: int) -> None:
-    """
-    Light validation only.
-    We assume CMS entry files are JSON files somewhere under the extracted tree.
-    If they are named as numeric IDs, ensure they begin at >= entry_start_id.
-    """
-    json_files = list(extract_dir.rglob("*.json"))
-    if not json_files:
-        print("Warning: no JSON files found in downloaded CMS package.")
-        return
-
-    for path in json_files:
-        stem = path.stem
-        if stem.isdigit():
-            entry_id = int(stem)
-            if entry_id < entry_start_id:
-                raise UpdateCMSError(
-                    f"Downloaded entry file {path.name} has entry_id {entry_id}, "
-                    f"which is below required start id {entry_start_id}."
-                )
+def parse_entry_number(entry_name: str) -> Optional[int]:
+    if not entry_name.startswith("entry-"):
+        return None
+    suffix = entry_name[6:]
+    if not suffix.isdigit():
+        return None
+    return int(suffix)
 
 
-def clear_entries_dir(channel_dir: Path) -> None:
-    entries_dir = channel_dir / ENTRIES_DIRNAME
-    if entries_dir.exists():
-        shutil.rmtree(entries_dir)
-    entries_dir.mkdir(parents=True, exist_ok=True)
+def validate_zip_entries(extract_dir: Path, entry_start_id: int) -> list[Path]:
+    entry_dirs = [p for p in extract_dir.iterdir() if p.is_dir() and p.name.startswith("entry-")]
+
+    if not entry_dirs:
+        raise UpdateCMSError("Downloaded CMS package does not contain any entry-* directories.")
+
+    for entry_dir in entry_dirs:
+        entry_num = parse_entry_number(entry_dir.name)
+        if entry_num is None:
+            raise UpdateCMSError(f"Invalid entry directory in downloaded package: {entry_dir.name}")
+        if entry_num < entry_start_id:
+            raise UpdateCMSError(
+                f"Downloaded entry {entry_dir.name} is below required start id {entry_start_id}."
+            )
+        if not (entry_dir / "story.md").exists():
+            raise UpdateCMSError(f"Downloaded entry is missing story.md: {entry_dir.name}")
+
+    return entry_dirs
 
 
-def install_release(extract_dir: Path, channel_dir: Path) -> None:
-    """
-    Copy extracted files into channel_dir/entries.
-    Keeps public/subscriber downloads separate from local user entries.
-    """
-    entries_dir = channel_dir / ENTRIES_DIRNAME
-    clear_entries_dir(channel_dir)
+def install_release(entry_dirs: list[Path], cms_dir: Path) -> None:
+    cms_dir.mkdir(parents=True, exist_ok=True)
 
-    for item in extract_dir.iterdir():
-        target = entries_dir / item.name
-        if item.is_dir():
-            shutil.copytree(item, target)
-        else:
-            shutil.copy2(item, target)
+    for source in entry_dirs:
+        target = cms_dir / source.name
+        if target.exists():
+            shutil.rmtree(target)
+        shutil.copytree(source, target)
 
 
-def print_release_info(channel: str, release: ReleaseInfo) -> None:
+def print_release_info(release: ReleaseInfo, latest_url: str, zip_url: str, cms_dir: Path) -> None:
     print()
-    print(f"Channel:          {channel}")
+    print("Heichalot-CMS updater")
+    print("---------------------")
+    print(f"Latest URL:       {latest_url}")
     print(f"Version:          {release.version}")
-    print(f"Zip URL:          {release.zip_url}")
+    print(f"Zip URL:          {zip_url}")
     print(f"Entry start ID:   {release.entry_start_id}")
+    print(f"Install CMS dir:  {cms_dir}")
     if release.notes:
         print(f"Notes:            {release.notes}")
 
 
-def run_update(data_root: Path) -> int:
-    email = prompt_user_email()
-    channel = choose_channel(email)
-    base_url = get_channel_url(channel)
-    channel_dir = get_channel_local_dir(data_root, channel)
-    channel_dir.mkdir(parents=True, exist_ok=True)
+def run_update(config_path: Optional[str], update_url: Optional[str], force: bool, dry_run: bool) -> int:
+    cfg, cfg_path, paths = load_app_config(config_path)
 
-    if channel == "subscriber":
-        print()
-        print("Attempting subscriber CMS update.")
-        print()
+    base_url, latest_url = latest_url_from_base(get_configured_update_url(cfg, update_url))
+    opener = build_url_opener()
 
-    opener = build_url_opener(channel)
-
-    latest_url = make_url(base_url, LATEST_JSON_NAME)
     latest_data = fetch_json(latest_url, opener)
     release = ReleaseInfo.from_dict(latest_data)
+    zip_url = resolve_zip_url(base_url, release.zip_url)
 
-    print_release_info(channel, release)
+    print_release_info(release, latest_url, zip_url, paths.cms_dir)
 
-    local_version = read_local_version(channel_dir)
-    if local_version == release.version:
+    local_version = read_local_version(paths.data_dir)
+    if local_version == release.version and not force:
         print()
         print("CMS data is already up to date.")
         return 0
 
-    zip_url = release.zip_url
-    if not zip_url.lower().startswith(("http://", "https://")):
-        zip_url = make_url(base_url, zip_url)
+    if dry_run:
+        print()
+        print("Dry run only. No files downloaded or installed.")
+        return 0
 
     with tempfile.TemporaryDirectory(prefix="updatecms_") as tmpdir_str:
         tmpdir = Path(tmpdir_str)
@@ -282,12 +313,12 @@ def run_update(data_root: Path) -> int:
             raise UpdateCMSError(f"Downloaded file is not a valid zip: {zip_path}") from exc
 
         print("Validating package...")
-        validate_zip_entries(extract_dir, release.entry_start_id)
+        entry_dirs = validate_zip_entries(extract_dir, release.entry_start_id)
 
-        print(f"Installing into: {channel_dir / ENTRIES_DIRNAME}")
-        install_release(extract_dir, channel_dir)
+        print(f"Installing into: {paths.cms_dir}")
+        install_release(entry_dirs, paths.cms_dir)
 
-    write_local_version(channel_dir, release)
+    write_local_version(paths.data_dir, release, latest_url, zip_url)
 
     print()
     print(f"CMS update complete. Installed version {release.version}.")
@@ -295,10 +326,16 @@ def run_update(data_root: Path) -> int:
 
 
 def main() -> int:
+    parser = build_arg_parser()
+    args = parser.parse_args()
+
     try:
-        # Run relative to project root by default.
-        data_root = DEFAULT_LOCAL_DATA_ROOT
-        return run_update(data_root)
+        return run_update(
+            config_path=args.config,
+            update_url=args.url,
+            force=args.force,
+            dry_run=args.dry_run,
+        )
     except KeyboardInterrupt:
         print("\nUpdate cancelled.")
         return 1
