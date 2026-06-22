@@ -28,6 +28,11 @@ from typing import Any, Dict, Optional
 from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin
 from urllib.request import Request, build_opener
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+
+console = Console()
 
 # Allow running directly from tools/ before package installation.
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -323,17 +328,21 @@ def delete_downloaded_entries(
     return deleted
 
 def print_release_info(release: ReleaseInfo, latest_url: str, zip_url: str, cms_dir: Path) -> None:
-    print()
-    print("Heichalot-CMS updater")
-    print("---------------------")
-    print(f"Latest URL:       {latest_url}")
-    print(f"Version:          {release.version}")
-    print(f"Zip URL:          {zip_url}")
-    print(f"Entry start ID:   {release.entry_start_id}")
-    print(f"Install CMS dir:  {cms_dir}")
-    if release.notes:
-        print(f"Notes:            {release.notes}")
 
+    table = Table(show_header=False, box=None)
+
+    table.add_row("Latest URL", latest_url)
+    table.add_row("Install CMS dir", str(paths.cms_dir))
+    table.add_row("Local version", local_version or "(none)")
+    table.add_row("Required files", str(len(selected_files)))
+
+    console.print(
+        Panel(
+            table,
+            title="Heichalot-CMS Updater",
+            border_style="cyan",
+        )
+    )
 
 def run_update(
     config_path: Optional[str],
@@ -356,21 +365,39 @@ def run_update(
         flush=flush,
     )
 
-    print()
-    print("Heichalot-CMS updater")
-    print("---------------------")
-    print(f"Latest URL:       {latest_url}")
-    print(f"Install CMS dir:  {paths.cms_dir}")
-    print(f"Local version:    {local_version or '(none)'}")
-    print(f"Required files:   {len(selected_files)}")
+    table = Table(show_header=False, box=None)
 
-    for filename in selected_files:
-        print(f"  - {filename}")
+    table.add_row("Latest URL", latest_url)
+    table.add_row("Install CMS dir", str(paths.cms_dir))
+    table.add_row("Local version", local_version or "(none)")
+    table.add_row("Required files", str(len(selected_files)))
 
-    if not selected_files and not force:
-        print()
-        print("CMS data is already up to date.")
-        return 0
+    console.print(
+        Panel(
+            table,
+            title="Heichalot-CMS Updater",
+            border_style="cyan",
+        )
+    )
+
+    if selected_files:
+        files_table = Table(title="Archives To Install")
+
+        files_table.add_column("#", justify="right")
+        files_table.add_column("Filename")
+
+        for idx, filename in enumerate(selected_files, start=1):
+            files_table.add_row(str(idx), filename)
+
+        console.print(files_table)
+
+        if not selected_files and not force:
+            console.print(
+                Panel.fit(
+                    "[green]CMS data is already up to date.[/green]",
+                    border_style="green",
+                )
+            )
 
     if dry_run:
         print()
