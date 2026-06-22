@@ -180,16 +180,6 @@ def fetch_json(url: str, opener) -> Dict[str, Any]:
     except json.JSONDecodeError as exc:
         raise UpdateCMSError(f"Invalid JSON received from {url}: {exc}") from exc
 
-def flush_allowed(cfg) -> bool:
-    if not cfg.has_section("updatecms"):
-        return False
-
-    return cfg.getboolean(
-        "updatecms",
-        "flush_allowed",
-        fallback=False,
-    )
-
 def download_file(url: str, dest_path: Path, opener) -> None:
     request = Request(url, headers={"User-Agent": "Heichalot-CMS-Updater/0.2"})
     try:
@@ -486,15 +476,15 @@ def install_selected_archives(
             install_release(entry_dirs, cms_dir)
 
 def main() -> int:
+    parser = build_arg_parser()
     parser.add_argument(
         "--flush",
         action="store_true",
         help=(
-            "Clears all CMS entries in the 1,000,000+ range before downloading. "
+            "Re-download everything"
         ),
     )
 
-    parser = build_arg_parser()
     args = parser.parse_args()
 
     try:
