@@ -1,11 +1,13 @@
 # Heichalot-CMS
 A Content-Management-System designed for Remote-Viewing Stories and Diaspora Information
 
-![Project Logo](philosophy.png "Project Philosophy")
+![Project Logo](images/philosophy.png "Project Philosophy")
 
 ## Introduction
 
-The Heichalot CMS is a lightweight framework for recording, reconstructing, and debating historical locations using structured data, images, and simple 3D models.
+The Heichalot CMS is a lightweight framework for story, searching and analysing remote-viewing and historical information.
+
+It provides the ability for recording, reconstructing, and debating historical locations using structured data, images, and simple 3D models.
 
 The system allows an **Archivist** to take a historical map, image, or written description of a place and convert it into a reproducible digital reconstruction. These reconstructions can then be viewed, compared across time, and debated using both human and AI analysis.
 
@@ -44,23 +46,15 @@ The project emphasizes **clarity and reproducibility over technical complexity**
 
 ---
 
-## The Archivist Workflow
+## Installation using Miniconda
 
-The system is built around the work of an Archivist.
+Open **Anaconda Prompt** or **Miniconda Prompt**.
 
-An Archivist performs the following steps:
-
-1. Create a new entry in the CMS.
-2. Provide a historical basemap or image.
-3. Generate simple 3D geometry from the map.
-4. Add narrative explanation describing the reconstruction.
-5. Export the scene for viewing or debate.
-
-The result is a directory containing a complete historical reconstruction.
-
----
-
-## The Core Artifact: `story.md`
-
-Each reconstruction is centered around a single file:
+```cmd
+conda create -n heichalotcms python=3.11
+conda activate heichalotcms
+git clone https://github.com/DavidLyon66/Heichalot-CMS.git
+cd Heichalot-CMS
+pip install -e .
+```
 
