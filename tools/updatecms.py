@@ -155,13 +155,7 @@ def resolve_zip_url(base_url: str, zip_url: str) -> str:
     if zip_url.lower().startswith(("http://", "https://")):
         return zip_url
 
-    # New server design: latest.json may say "cms-YYYY-MM-DD.zip" while
-    # Flask serves archives from /cms/archive/<filename>.
-    if "/" not in zip_url and "\\" not in zip_url:
-        return urljoin(base_url, f"archive/{zip_url}")
-
     return urljoin(base_url, zip_url)
-
 
 def build_url_opener():
     return build_opener()
