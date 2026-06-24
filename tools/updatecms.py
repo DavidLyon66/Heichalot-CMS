@@ -22,6 +22,7 @@ import shutil
 import sys
 import tempfile
 import zipfile
+import base64
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -150,6 +151,22 @@ def latest_url_from_base(value: str) -> tuple[str, str]:
 
     return base_url, latest_url
 
+def get_update_email(cfg) -> str:
+    if not cfg.has_section("updatecms"):
+        return ""
+    return cfg.get("updatecms", "email", fallback="").strip().lower()
+
+
+def update_code_from_email(email: str) -> str:
+    raw = email.strip().lower().encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def latest_url_from_base_and_code(value: str, code: str) -> tuple[str, str]:
+    base_url, _old_latest = latest_url_from_base(value)
+    archive_base_url = urljoin(base_url, f"archive/{code}/")
+    latest_url = urljoin(archive_base_url, "latest.json")
+    return archive_base_url, latest_url
 
 def resolve_zip_url(base_url: str, zip_url: str) -> str:
     if zip_url.lower().startswith(("http://", "https://")):
@@ -347,7 +364,19 @@ def run_update(
 ) -> int:
     cfg, cfg_path, paths = load_app_config(config_path)
 
-    base_url, latest_url = latest_url_from_base(get_configured_update_url(cfg, update_url))
+    email = get_update_email(cfg)
+    if not email:
+        raise UpdateCMSError(
+            "Missing update email. Set [updatecms] email=you@example.com in config.ini."
+        )
+
+    code = update_code_from_email(email)
+
+    base_url, latest_url = latest_url_from_base_and_code(
+        get_configured_update_url(cfg, update_url),
+        code,
+    )
+
     opener = build_url_opener()
 
     latest_data = fetch_json(latest_url, opener)
