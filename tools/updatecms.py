@@ -364,11 +364,7 @@ def run_update(
 ) -> int:
     cfg, cfg_path, paths = load_app_config(config_path)
 
-    email = get_update_email(cfg)
-    if not email:
-        raise UpdateCMSError(
-            "Missing update email. Set [updatecms] email=you@example.com in config.ini."
-        )
+    email = get_update_email(cfg) or "free@heichalot.tech"
 
     code = update_code_from_email(email)
 
