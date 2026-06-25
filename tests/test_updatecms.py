@@ -276,3 +276,51 @@ def test_run_update_flush_allowed_deletes_1m_entries_and_installs_archive(tmp_pa
     assert not delete_entry.exists()
     assert (cms_dir / "entry-1000002" / "story.md").read_text(encoding="utf-8") == "# Installed\n"
     assert (data_dir / "updatecms-version.json").exists()
+
+def test_install_archive_to_entries_db_imports_story_md(tmp_path):
+    import sqlite3
+    import zipfile
+
+    from tools.updatecms import install_archive_to_entries_db
+
+    zip_path = tmp_path / "cms-update-2026-06-23.zip"
+    db_path = tmp_path / "content.db"
+
+    story = """---
+entry_id: entry-1000001
+title: Test Entry
+tags:
+  - remote-viewing
+access: free
+status: Published
+---
+
+# Test Entry
+
+Body text.
+"""
+
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr("entry-1000001/story.md", story)
+
+    install_archive_to_entries_db(zip_path, db_path)
+
+    conn = sqlite3.connect(db_path)
+    try:
+        row = conn.execute(
+            """
+            SELECT entry_id, title, status, story_md
+            FROM entries
+            WHERE entry_id = ?
+            """,
+            ("entry-1000001",),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert row == (
+        "entry-1000001",
+        "Test Entry",
+        "published",
+        story,
+    )
