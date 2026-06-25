@@ -23,6 +23,8 @@ import sys
 import tempfile
 import zipfile
 import base64
+import sqlite3
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -129,6 +131,115 @@ def get_configured_update_url(cfg, explicit_url: Optional[str]) -> str:
 
     return DEFAULT_UPDATE_URL
 
+def ensure_entries_db(db_path: Path) -> None:
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS entries (
+                entry_id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                stream_name TEXT NOT NULL DEFAULT 'free',
+                tags TEXT,
+                status TEXT NOT NULL CHECK (status IN ('draft', 'published', 'archived')),
+                location TEXT,
+                yaml_header TEXT,
+                story_md TEXT NOT NULL,
+                assets TEXT,
+                html TEXT,
+                published_utc TEXT,
+                created_utc TEXT NOT NULL,
+                updated_utc TEXT NOT NULL
+            )
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+def split_story_md(text: str) -> tuple[dict, str, str]:
+    if not text.startswith("---"):
+        return {}, "", text
+
+    parts = text.split("---", 2)
+    if len(parts) < 3:
+        return {}, "", text
+
+    yaml_header = parts[1].strip()
+    body = parts[2]
+
+    try:
+        import yaml
+        data = yaml.safe_load(yaml_header) or {}
+    except Exception:
+        data = {}
+
+    return data, yaml_header, body
+
+def title_from_story(data: dict, body: str, entry_id: str) -> str:
+    if data.get("title"):
+        return str(data["title"]).strip()
+
+    for line in body.splitlines():
+        if line.startswith("# "):
+            return line[2:].strip()
+
+    return entry_id
+
+def install_archive_to_entries_db(zip_path: Path, db_path: Path) -> None:
+    ensure_entries_db(db_path)
+
+    conn = sqlite3.connect(db_path)
+    try:
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            for name in zf.namelist():
+                if not name.endswith("/story.md"):
+                    continue
+
+                entry_id = name.split("/", 1)[0]
+                story_md = zf.read(name).decode("utf-8")
+
+                data, yaml_header, body = split_story_md(story_md)
+
+                title = title_from_story(data, body, entry_id)
+
+                status = str(data.get("status") or "published").lower()
+                if status == "published":
+                    status = "published"
+                elif status not in {"draft", "published", "archived"}:
+                    status = "published"
+
+                now = datetime.utcnow().isoformat(timespec="seconds")
+
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO entries (
+                        entry_id, title, stream_name, tags, status,
+                        location, yaml_header, story_md, html,
+                        published_utc, created_utc, updated_utc
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        entry_id,
+                        title,
+                        str(data.get("stream_name") or "free"),
+                        "",
+                        status,
+                        str(data.get("location") or ""),
+                        yaml_header,
+                        story_md,
+                        story_md,
+                        str(data.get("published_utc") or now),
+                        str(data.get("created_utc") or now),
+                        now,
+                    ),
+                )
+
+        conn.commit()
+    finally:
+        conn.close()
 
 def latest_url_from_base(value: str) -> tuple[str, str]:
     """
@@ -438,12 +549,16 @@ def run_update(
         print()
         print(f"Flush deleted {len(deleted)} downloaded CMS entr{'y' if len(deleted) == 1 else 'ies'}.")
 
+
+    entries_db_path = paths.data_dir / "content.db"
+
     install_selected_archives(
         selected_files,
         base_url,
         opener,
         paths.cms_dir,
         entry_start_id=DOWNLOADED_ENTRY_START_ID,
+        entries_db_path=entries_db_path,
     )
 
     write_local_manifest_version(
@@ -494,6 +609,7 @@ def install_selected_archives(
     opener,
     cms_dir: Path,
     entry_start_id: int = DOWNLOADED_ENTRY_START_ID,
+    entries_db_path: Path | None = None,
 ) -> None:
     with tempfile.TemporaryDirectory(prefix="updatecms_") as tmpdir_str:
         tmpdir = Path(tmpdir_str)
@@ -520,6 +636,10 @@ def install_selected_archives(
 
             print(f"Installing into: {cms_dir}")
             install_release(entry_dirs, cms_dir)
+
+            if entries_db_path is not None:
+                print(f"Updating local content database: {entries_db_path}")
+                install_archive_to_entries_db(zip_path, entries_db_path)
 
 def main() -> int:
     parser = build_arg_parser()
