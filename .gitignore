@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+.venv/
+venv/
+
+# Node / Remotion
+node_modules/
+videorender/node_modules/
+videorender/output/
+videorender/build/
+videorender/.cache/
+
+# CMS data
+cms_data/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Config (contains local paths)
+config.ini
+*.ini
