@@ -27,10 +27,7 @@ dev = [
 
 [project.scripts]
 heichalot-update = "tools.updatecms:main"
-heichalot-server = "tools.server:main"
 heichalot-create-entry = "tools.createentry:main"
-heichalot-alter-entry = "tools.alterentry:main"
-heichalot-publish-entry = "tools.publishentry:main"
 heichalot-config = "tools.config:main"
 heichalot-list = "tools.lscms:main"
 heichalot-search = "tools.searchcms:main"
