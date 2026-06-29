@@ -5,11 +5,9 @@ A Content-Management-System designed for Remote-Viewing Stories and Diaspora Inf
 
 ## Introduction
 
-The Heichalot CMS is a lightweight framework for story, searching and analysing remote-viewing and historical information.
+Heichalot CMS is a lightweight framework for recording, searching, and analysing remote-viewing and historical information.
 
-It provides the ability for recording, reconstructing, and debating historical locations using structured data, images, and simple 3D models.
-
-The system allows an **Archivist** to take a historical map, image, or written description of a place and convert it into a reproducible digital reconstruction. These reconstructions can then be viewed, compared across time, and debated using both human and AI analysis.
+The system allows an **Archivist** to take a historical map, image, or written description of a place and convert it into a reproducible digital reconstruction. These reconstructions can be viewed, compared across time, and debated using both human and AI analysis.
 
 The project originated from a simple question:
 
@@ -19,10 +17,11 @@ Rather than storing historical claims only as text or narrative, the system reco
 
 - structured metadata
 - original images and maps
-- generated geometry and scenes
 - narrative explanation written by the archivist
 
-Each historical entry therefore becomes a **reproducible historical artifact** rather than only a written argument.
+Each historical entry becomes a **reproducible historical artifact** rather than only a written argument.
+
+A live instance is available at **[https://heichalot.tech/cms](https://heichalot.tech/cms)**.
 
 ---
 
@@ -34,11 +33,11 @@ Most historical reconstruction tools are large GIS systems or complex game engin
 
 Heichalot takes a different approach:
 
-- plain text files
+- plain text files (Markdown + YAML frontmatter)
 - minimal configuration
-- simple Python tools
+- simple Python CLI tools
 - optional Blender modeling
-- lightweight ThreeJS viewing
+- output to PDF, HTML, and video (Remotion)
 
 This allows a reconstruction to be built quickly while still preserving enough structure for later verification.
 
@@ -46,15 +45,86 @@ The project emphasizes **clarity and reproducibility over technical complexity**
 
 ---
 
-## Installation using Miniconda
+## Features
 
-Open **Anaconda Prompt** or **Miniconda Prompt**.
+- **Entry management** — create, list, and search CMS entries with structured metadata (location, year, source, tags)
+- **PDF rendering** — story to PDF via ReportLab with dialogue, prose, slides, and images
+- **HTML rendering** — standalone or fragment HTML output
+- **Video rendering** — compile story markdown into video via Remotion (React/TypeScript)
+- **Search** — full-text and metadata search across entries
+- **LAN AI chat** — MQTT-based controller for local Ollama-powered AI conversations
+- **YouTube import** — pull YouTube transcripts into CMS entries
+- **AI transcript import** — import terminal AI session transcripts into story format
+- **Blender integration** — import base maps and generate 3D scene geometry
 
-```cmd
-conda create -n heichalotcms python=3.11
-conda activate heichalotcms
+---
+
+## Installation
+
+### Prerequisites
+
+- Python 3.10+ and pip
+- Node.js 18+ and npm (for video rendering only)
+- Optional: Blender 3.x (for 3D scene tools)
+- Optional: Mosquitto MQTT broker (for LAN AI chat)
+
+### Setup
+
+```bash
 git clone https://github.com/DavidLyon66/Heichalot-CMS.git
 cd Heichalot-CMS
 pip install -e .
+heichalot-config --setup
 ```
 
+The config setup will prompt for your CMS content directory (default: `~/Documents/heichalot-cms/cms`).
+
+### Video rendering (optional)
+
+```bash
+cd videorender
+npm install
+```
+
+---
+
+## Usage
+
+```bash
+# List CMS entries
+heichalot-ls
+
+# Search entries
+heichalot-search
+
+# Render an entry to PDF
+heichalot-renderpdf <entry-id>
+
+# Render an entry to HTML
+heichalot-renderhtml <entry-id>
+
+# Update content from remote server
+heichalot-update
+```
+
+---
+
+## Project Structure
+
+```
+Heichalot-CMS/
+  tools/              # Python CLI tools (package)
+  tests/              # pytest test suite
+  videorender/        # Remotion video rendering project
+  sphinx/             # Documentation
+  images/             # Project assets
+  cms/                # (optional) local sample entries
+```
+
+CMS content is stored separately — configured at setup time (default `~/Documents/heichalot-cms/cms`).
+
+---
+
+## License
+
+MIT
