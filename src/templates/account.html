@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}Account{% endblock %}
+{% block content %}
+<h1>Account</h1>
+<p>Email: {{ user.email }}</p>
+<p>Access level: {{ user.access_level }}</p>
+<p>Created: {{ user.created_utc }}</p>
+<p>You can manually change access in SQLite for now:</p>
+<pre>UPDATE users SET access_level = 'premium' WHERE email = 'someone@example.com';</pre>
+{% endblock %}

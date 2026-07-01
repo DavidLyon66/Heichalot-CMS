@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Admin Users{% endblock %}
+{% block content %}
+
+<h1>Admin Users</h1>
+
+<table border="1" cellpadding="8" cellspacing="0">
+  <tr>
+    <th>ID</th>
+    <th>Email</th>
+    <th>Access</th>
+    <th>Active</th>
+    <th>Created</th>
+    <th>Action</th>
+  </tr>
+
+  {% for user in users %}
+  <tr>
+    <td>{{ user.user_id }}</td>
+    <td>{{ user.email }}</td>
+    <td>{{ user.access_level }}</td>
+    <td>{{ user.is_active }}</td>
+    <td>{{ user.created_utc }}</td>
+    <td>
+      {% if user.is_active %}
+        <form method="post" action="{{ url_for('admin_deactivate_user', user_id=user.user_id) }}">
+          <button type="submit">Deactivate</button>
+        </form>
+      {% else %}
+        <form method="post" action="{{ url_for('admin_approve_user', user_id=user.user_id) }}">
+          <button type="submit">Approve</button>
+        </form>
+      {% endif %}
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+
+{% endblock %}

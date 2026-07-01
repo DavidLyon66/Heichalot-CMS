@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}{{ entry.title }}{% endblock %}
+{% block content %}
+  <button class="toolbar-button"
+          hx-get="/cms/modal/downloadpdf/{{ entry.entry_id }}"
+          hx-target="#modals-here"
+          hx-trigger="click">
+    PDF
+  </button>
+
+  {% if user_level in ["free", "", none] %}
+    <button class="toolbar-button"
+            hx-get="/cms/modal/fullstory/{{ entry.entry_id }}"
+            hx-target="#modals-here"
+            hx-trigger="click">
+      Full Story
+    </button>
+  {% else %}
+    <a class="toolbar-button" href="/entry/{{ entry.entry_id }}?view=full">
+      Full Story
+    </a>
+  {% endif %}
+
+<p><small>Entry: {{ entry.entry_id }} | Stream: {{ entry.stream_name or 'none' }} | Your level: {{ user_level }} | Entry access: {{ required_level }}</small></p>
+<div class="entry-content">
+  {{ rendered_html | safe }}
+</div>
+{% if related %}
+  <h2>Related entries</h2>
+  <ul>
+    {% for r in related %}
+      <li><a href="{{ url_for('entry', entry_id=r.entry_id) }}">{{ r.title }}</a></li>
+    {% endfor %}
+  </ul>
+{% endif %}
+{% endblock %}
+

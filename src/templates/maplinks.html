@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}Map Links — {{ entry.title }}{% endblock %}
+
+{% block content %}
+<p>
+  <small>
+    Entry: {{ entry.entry_id }} |
+    Stream: {{ entry.stream_name or 'none' }} |
+    Map links view
+  </small>
+</p>
+
+<h1>Map Links — {{ entry.title }}</h1>
+
+{% if entry.location %}
+  <p class="section-description">Location: {{ entry.location }}</p>
+{% endif %}
+
+<div id="site-map" style="height: 480px; margin: 1.5rem 0; border-radius: 10px; overflow: hidden;"></div>
+
+{% if linked_sites %}
+  <h2>Linked sites</h2>
+  <ul class="entry-list">
+    {% for site in linked_sites %}
+      <li>
+        <a href="{{ url_for('entry', entry_id=site.entry_id) }}">{{ site.title }}</a>
+        <small>
+          {{ site.entry_id }}
+          {% if site.lat is defined and site.lon is defined %}
+            | {{ site.lat }}, {{ site.lon }}
+          {% endif %}
+        </small>
+      </li>
+    {% endfor %}
+  </ul>
+{% else %}
+  <p>No linked map sites found for this entry.</p>
+{% endif %}
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+
+<script>
+  // Expected server-side shape:
+  // linked_sites = [
+  //   {entry_id: "entry-1000057", title: "Ballarat Site", lat: -37.5622, lon: 143.8503},
+  //   {entry_id: "entry-1000061", title: "Portugal Site", lat: 38.7223, lon: -9.1393}
+  // ]
+  const sites = {{ linked_sites|default([])|tojson }};
+
+  const usableSites = sites.filter(function (s) {
+    return s.lat !== undefined && s.lon !== undefined && s.lat !== null && s.lon !== null;
+  });
+
+  if (usableSites.length > 0) {
+    const map = L.map("site-map");
+    const points = usableSites.map(function (s) { return [s.lat, s.lon]; });
+
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 18,
+      attribution: "&copy; OpenStreetMap contributors"
+    }).addTo(map);
+
+    usableSites.forEach(function (s) {
+      const popupHtml =
+        "<b>" + (s.title || s.entry_id) + "</b><br>" +
+        "<a href='" + "{{ url_for('index') }}".replace(/\/$/, "") + "/entry/" + s.entry_id + "'>" + s.entry_id + "</a>";
+
+      L.marker([s.lat, s.lon])
+        .addTo(map)
+        .bindPopup(popupHtml);
+    });
+
+    if (points.length >= 2) {
+      L.polyline(points, {
+        weight: 3,
+        opacity: 0.75
+      }).addTo(map);
+    }
+
+    map.fitBounds(points, { padding: [40, 40] });
+  } else {
+    document.getElementById("site-map").innerHTML =
+      "<p style='padding:1rem;'>No GPS points available for this map.</p>";
+  }
+</script>
+{% endblock %}

@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}Login{% endblock %}
+{% block content %}
+<h1>Login</h1>
+<form method="post">
+  <p><label>Email<br><input type="email" name="email" value="{{ email or '' }}" required></label></p>
+  <p><label>Password<br><input type="password" name="password" required></label></p>
+  <p><button type="submit">Login</button></p>
+</form>
+{% endblock %}

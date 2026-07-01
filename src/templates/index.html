@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Entries{% endblock %}
+
+{% block content %}
+<h1>
+  {{ stream_name if stream_name else section_name|default("CMS Articles") }}
+</h1>
+
+{% if user_streams %}
+  <div class="stream-buttons">
+    {% for stream in user_streams %}
+      <a class="stream-button {% if stream.key == stream_tag %}active{% endif %}"
+         href="{{ url_for('tag_page', tag=stream.key) }}"
+         title="{{ stream.description }}"
+         style="--stream-colour: {{ stream.colour|default('#A38658') }}">
+        {{ stream.label }}
+      </a>
+    {% endfor %}
+  </div>
+{% endif %}
+
+{% if stream_description %}
+  <p class="section-description">
+    {{ stream_description }}
+  </p>
+{% endif %}
+
+<p style="opacity:0.6;">
+  timeline range:
+  {{ "-∞" if min_year is none else min_year }}
+  →
+  {{ "+∞" if max_year is none else max_year }}
+</p>
+
+<ul class="entry-list">
+  {% for entry in entries %}
+    <li class="entry-row">
+      <span class="entry-time">
+        {{ entry.time_label }}
+      </span>
+      <span class="entry-title">
+        <a href="{{ url_for('entry', entry_id=entry.entry_id) }}">{{ entry.title }}</a>
+        <small>{{ entry.entry_id }} | {{ entry.stream_name or 'no-stream' }} | {{ entry.access_level }}</small>
+      </span>
+    </li>
+  {% endfor %}
+</ul>
+
+{% if total_pages and total_pages > 1 %}
+  <div class="pagination">
+    {% if page > 1 %}
+      <a href="{{ url_for(request.endpoint, page=page-1, **request.view_args) }}">← Previous</a>
+    {% endif %}
+
+    <span>Page {{ page }} of {{ total_pages }}</span>
+
+    {% if page < total_pages %}
+      <a href="{{ url_for(request.endpoint, page=page+1, **request.view_args) }}">Next →</a>
+    {% endif %}
+  </div>
+{% endif %}
+
+{% endblock %}

@@ -1,0 +1,213 @@
+{% extends "base.html" %}
+{% block title %}Map Links — {{ entry.title }}{% endblock %}
+
+{% block content %}
+<p>
+  <small>
+    Entry: {{ entry.entry_id }} |
+    Stream: {{ entry.stream_name or 'none' }} |
+    Map links view
+  </small>
+</p>
+
+<h1>Map Links — {{ entry.title }}</h1>
+
+{% if entry.location %}
+  <p class="section-description">Location: {{ entry.location }}</p>
+{% endif %}
+
+{% if user_level == 'archivist' %}
+  <section class="archivist-tools" style="margin: 1rem 0; padding: 1rem; border: 1px solid #2c313a; border-radius: 8px; background: rgba(255,255,255,0.04);">
+    <h2 style="margin-top: 0;">Archivist tools</h2>
+    <p style="opacity: 0.75; margin-top: -0.5rem;">Lookup a place name or address and copy the GPS result into the entry YAML later.</p>
+
+    <input id="address-search"
+           placeholder="Search address or place..."
+           style="padding: 6px 10px; border-radius: 6px; border: 1px solid #555; min-width: 280px;">
+    <button type="button" onclick="findAddress()"
+            style="padding: 6px 10px; border-radius: 6px; border: 1px solid #555;">
+      Find
+    </button>
+
+    <p id="gps-result" style="font-family: monospace; opacity: 0.85; white-space: pre-line;"></p>
+  </section>
+{% endif %}
+
+<div id="site-map" style="height: 480px; margin: 1.5rem 0; border-radius: 10px; overflow: hidden;"></div>
+
+{% if linked_sites %}
+  <h2>Linked sites</h2>
+  <ul class="entry-list">
+    {% for site in linked_sites %}
+      <li>
+        <a href="{{ url_for('entry', entry_id=site.entry_id) }}">{{ site.title }}</a>
+        <small>
+          {{ site.entry_id }}
+          {% if site.lat is defined and site.lon is defined %}
+            | {{ site.lat }}, {{ site.lon }}
+          {% endif %}
+        </small>
+      </li>
+    {% endfor %}
+  </ul>
+{% else %}
+  <p>No linked map sites found for this entry.</p>
+{% endif %}
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css">
+
+<style>
+  .leaflet-popup-content-wrapper {
+    opacity: 0.94;
+  }
+
+  .map-popup-card {
+    min-width: 160px;
+    max-width: 220px;
+  }
+
+  .map-popup-card img {
+    width: 120px;
+    height: auto;
+    margin: 6px 0;
+    border-radius: 6px;
+    display: block;
+  }
+
+  .map-popup-card p {
+    margin: 4px 0;
+  }
+</style>
+
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+
+<script>
+  // Expected server-side shape:
+  // linked_sites = [
+  //   {entry_id: "entry-1000057", title: "Ballarat Site", lat: -37.5622, lon: 143.8503, note: "Short popup note.", image: "/cms/images/example.png"},
+  //   {entry_id: "entry-1000061", title: "Portugal Site", lat: 38.7223, lon: -9.1393}
+  // ]
+  const sites = {{ linked_sites|default([])|tojson }};
+  let geocodeMarker = null;
+
+  function escapeHtml(value) {
+    return String(value || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  }
+
+  async function findAddress() {
+    const input = document.getElementById("address-search");
+    const result = document.getElementById("gps-result");
+    if (!input || !result) return;
+
+    const q = input.value.trim();
+    if (!q) {
+      result.textContent = "Enter an address or place name.";
+      return;
+    }
+
+    result.textContent = "Searching...";
+
+    const url = "https://nominatim.openstreetmap.org/search?format=json&limit=1&q=" +
+                encodeURIComponent(q);
+
+    try {
+      const res = await fetch(url);
+      const data = await res.json();
+
+      if (!data.length) {
+        result.textContent = "No result found.";
+        return;
+      }
+
+      const lat = parseFloat(data[0].lat);
+      const lon = parseFloat(data[0].lon);
+      const label = data[0].display_name || q;
+
+      result.textContent = "gps:\n  lat: " + lat.toFixed(6) + "\n  lon: " + lon.toFixed(6);
+
+      if (window.siteMap) {
+        if (geocodeMarker) {
+          window.siteMap.removeLayer(geocodeMarker);
+        }
+
+        geocodeMarker = L.marker([lat, lon])
+          .addTo(window.siteMap)
+          .bindPopup("<b>Search result</b><br>" + escapeHtml(label) + "<br><small>" + lat.toFixed(6) + ", " + lon.toFixed(6) + "</small>")
+          .openPopup();
+
+        window.siteMap.setView([lat, lon], 14);
+      }
+    } catch (err) {
+      result.textContent = "Lookup failed.";
+      console.error(err);
+    }
+  }
+
+  const usableSites = sites.filter(function (s) {
+    return s.lat !== undefined && s.lon !== undefined && s.lat !== null && s.lon !== null;
+  });
+
+  if (usableSites.length > 0) {
+    const map = L.map("site-map");
+    window.siteMap = map;
+
+    const points = usableSites.map(function (s) { return [s.lat, s.lon]; });
+
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 18,
+      attribution: "&copy; OpenStreetMap contributors"
+    }).addTo(map);
+
+    usableSites.forEach(function (s) {
+      const entryUrl = "{{ url_for('entry', entry_id='__ENTRY_ID__') }}".replace("__ENTRY_ID__", encodeURIComponent(s.entry_id));
+      const title = escapeHtml(s.title || s.entry_id);
+      const entryId = escapeHtml(s.entry_id);
+      const note = escapeHtml(s.note || s.description || "");
+      const image = escapeHtml(s.image || "");
+
+      const popupHtml = `
+        <div class="map-popup-card">
+          <strong>${title}</strong><br>
+          <small>${entryId}</small><br>
+
+          ${image ? `
+            <img src="${image}" alt="${title}">
+          ` : ""}
+
+          ${note ? `<p>${note}</p>` : ""}
+
+          <a href="${entryUrl}">Open entry</a>
+        </div>
+      `;
+
+      const popup = L.popup({
+        autoClose: false,
+        closeOnClick: false,
+        closeButton: true
+      }).setContent(popupHtml);
+
+      L.marker([s.lat, s.lon])
+        .addTo(map)
+        .bindPopup(popup)
+        .openPopup();
+    });
+
+    if (points.length >= 2) {
+      L.polyline(points, {
+        weight: 3,
+        opacity: 0.75
+      }).addTo(map);
+    }
+
+    map.fitBounds(points, { padding: [40, 40] });
+  } else {
+    document.getElementById("site-map").innerHTML =
+      "<p style='padding:1rem;'>No GPS points available for this map.</p>";
+  }
+</script>
+{% endblock %}

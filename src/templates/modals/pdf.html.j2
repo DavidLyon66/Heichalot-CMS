@@ -1,0 +1,34 @@
+<div class="modal fade show" style="display:block;" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content orange-theme">
+      <div class="modal-header">
+        <h5 class="modal-title">Download PDF</h5>
+        <button type="button" class="btn-close"
+                hx-get=""
+                hx-target="#modals-here"></button>
+      </div>
+
+      <div class="modal-body">
+        <p>You can download this article as a PDF for <strong>US$2.50</strong>.</p>
+        <p>Or subscribe from <strong>US$10/year</strong> to support the archive.</p>
+      </div>
+
+      <div class="modal-footer">
+        <a href="/buy-pdf/{{ entry.entry_id }}" class="btn btn-primary">
+          Buy PDF
+        </a>
+
+        <a href="/subscribe" class="btn btn-success">
+          Subscribe
+        </a>
+
+        <button class="btn btn-secondary"
+                hx-get=""
+                hx-target="#modals-here">
+          Cancel
+        </button>
+      </div>
+
+    </div>
+  </div>
+</div>

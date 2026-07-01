@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1>Tag: {{ tag }}</h1>
+
+<ul>
+{% for entry in entries %}
+  <li>
+    <a href="/entry/{{ entry.entry_id }}">{{ entry.title }}</a>
+    {% if entry.published_utc %}<small>{{ entry.published_utc }}</small>{% endif %}
+  </li>
+{% else %}
+  <li>No entries found.</li>
+{% endfor %}
+</ul>
+{% endblock %}

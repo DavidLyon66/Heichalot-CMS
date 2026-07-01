@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+<div style="max-width:600px;margin:80px auto;text-align:center;padding:40px;background:#16213e;border-radius:12px">
+  <h1 style="color:#e94560">{{ title }}</h1>
+  <p style="font-size:18px;line-height:1.6;color:#e0e0e0">{{ message | safe }}</p>
+  <p style="margin-top:24px"><a href="/" style="color:#0f3460;text-decoration:none;background:#e94560;padding:10px 24px;border-radius:6px;font-weight:bold;color:#fff">Go Home</a></p>
+</div>
+{% endblock %}

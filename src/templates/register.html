@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Register{% endblock %}
+{% block content %}
+<h1>Register</h1>
+<form method="post">
+  <p><label>Email<br><input type="email" name="email" value="{{ email or '' }}" required></label></p>
+  <p><label>Password<br><input type="password" name="password" required></label></p>
+  <p>
+    <label>Account type<br>
+      <select name="access_level">
+        <option value="free" {% if access_level == 'free' %}selected{% endif %}>free</option>
+        <option value="members" {% if access_level == 'members' %}selected{% endif %}>members</option>
+        <option value="premium" {% if access_level == 'premium' %}selected{% endif %}>premium</option>
+      </select>
+    </label>
+  </p>
+  <p><button type="submit">Register</button></p>
+</form>
+<p><small>Premium currently redirects to a placeholder Stripe/payment page.</small></p>
+{% endblock %}
