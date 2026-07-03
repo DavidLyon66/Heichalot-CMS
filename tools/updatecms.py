@@ -331,7 +331,7 @@ def preprocess_dialogs(text: str) -> str:
         m = DIALOG_OPEN_RE.match(line)
         if m:
             current_char = m.group(1)
-            result.append(f'<h3>{current_char}</h3>\n')
+            result.append(f'### {current_char}\n')
             in_dialog = True
             in_paren = False
             continue
@@ -586,12 +586,12 @@ def select_required_downloads(
 
 def is_flush_allowed(cfg) -> bool:
     if not cfg.has_section("updatecms"):
-        return False
+        return True
 
     return cfg.getboolean(
         "updatecms",
         "flush_allowed",
-        fallback=False,
+        fallback=True,
     )
 
 def install_release(entry_dirs: list[Path], cms_dir: Path) -> None:
