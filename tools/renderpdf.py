@@ -437,14 +437,18 @@ def generate_pdf(input_path=".", output_path=None, image_height_mm=65, image_ali
         doc.build(flow)
         return output_path
     metadata, title, blocks = parse_story(text)
-    output_path = Path(output_path) if output_path else story_path.with_name(f"{safe_filename(title)}.pdf")
+    output_path = (
+        Path(output_path).expanduser().resolve()
+        if output_path is not None
+        else (story_path.parent / f"{safe_filename(title)}.pdf").resolve()
+    )
     illustration_path = find_illustration_image(story_path)
     parsed_heading_colors = parse_color_list(heading_colors)
     parsed_header_fields = parse_header_fields(header_fields)
     doc = SimpleDocTemplate(str(output_path), pagesize=A4, leftMargin=20 * mm, rightMargin=20 * mm, topMargin=18 * mm, bottomMargin=18 * mm, title=title, author="Heichalot-CMS")
     flow = build_story_flowables(title, blocks, metadata=metadata, header_fields=parsed_header_fields, illustration_path=illustration_path, image_height_mm=image_height_mm, image_align=image_align, heading_colors=parsed_heading_colors, story_path=story_path)
     doc.build(flow)
-    return output_path
+    return str(output_path)
 
 def build_arg_parser():
     parser = argparse.ArgumentParser(description="Render story.md, summary.md, or slides.md to PDF.")

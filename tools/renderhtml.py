@@ -1,407 +1,433 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+import argparse, html, json, re
 from pathlib import Path
-import re
-import html
-import sys
+from typing import Dict, List, Optional, Tuple
 
-INLINE_IMAGE_RE = re.compile(r'^!\[(.*?)\]\(([^/\\]+)\)(?:\{([^}]*)\})?$')
+try:
+    from jinja2 import Environment, FileSystemLoader, select_autoescape
+except Exception:
+    Environment = None
+    FileSystemLoader = None
+    select_autoescape = None
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SCRIPT_DIR.parent
 
-def strip_front_matter(text):
-    if text.startswith('---'):
-        m = re.match(r'^---\s*\n(.*?)\n---\s*\n', text, re.DOTALL)
-        if m:
-            return m.group(1), text[m.end():]
-    return '', text
+DEFAULT_TEMPLATES_DIR = SCRIPT_DIR / "templates"
+DEFAULT_CMS_DIR = PROJECT_ROOT / "cms"
+DEFAULT_PUBLISHED_JSON = DEFAULT_CMS_DIR / "publishedcms.json"
 
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="Render story.md to HTML.")
+    p.add_argument("input", nargs="?", default=".", help="Entry directory or story.md file. Default: .")
+    p.add_argument("-o", "--output", help="Output HTML file path.")
+    p.add_argument("--plain-html", action="store_true", help="Render using the old plain HTML wrapper.")
+    p.add_argument("--templates-dir", default=str(DEFAULT_TEMPLATES_DIR), help="Templates directory.")
+    p.add_argument("--index", action="store_true", help="Generate an index page from cms/publishedcms.json.")
+    p.add_argument("--cms-dir", default=str(DEFAULT_CMS_DIR), help="CMS root.")
+    p.add_argument("--published-json", default=str(DEFAULT_PUBLISHED_JSON), help="Path to publishedcms.json.")
+    p.add_argument("--site-title", default="Published Stories", help="Title for the generated index page.")
+    return p.parse_args()
 
-def parse_front_matter(front_matter_text):
-    metadata = {}
-    for raw_line in front_matter_text.splitlines():
-        line = raw_line.rstrip()
-        if not line or line.lstrip().startswith('#') or ':' not in line:
+def split_frontmatter(text: str) -> Tuple[Optional[str], str]:
+    if not text.startswith("---"):
+        return None, text
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return None, text
+    for i in range(1, len(lines)):
+        if lines[i].strip() == "---":
+            fm = "\n".join(lines[1:i])
+            rest = "\n".join(lines[i + 1 :])
+            if text.endswith("\n"):
+                rest += "\n"
+            return fm, rest
+    return None, text
+
+def parse_simple_yaml(block: Optional[str]) -> Dict[str, str]:
+    data: Dict[str, str] = {}
+    if not block:
+        return data
+    for line in block.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or ":" not in line:
             continue
-        key, value = line.split(':', 1)
-        metadata[key.strip()] = value.strip()
-    return metadata
+        k, v = line.split(":", 1)
+        data[k.strip()] = v.strip().strip('"').strip("'")
+    return data
 
+def escape_inline(text: str) -> str:
+    return html.escape(text, quote=False)
 
-def parse_story(text):
-    front_matter_text, body_plus = strip_front_matter(text)
-    metadata = parse_front_matter(front_matter_text)
-
-    title_match = re.search(r'^# (.+)', body_plus, re.MULTILINE)
-    title = title_match.group(1).strip() if title_match else 'story'
-
-    raw_blocks = re.findall(r'"""(.*?)\n(.*?)"""', body_plus, re.DOTALL)
-    if raw_blocks:
-        blocks = [(speaker.strip(), content.strip()) for speaker, content in raw_blocks]
-        return metadata, title, blocks
-
-    body = re.sub(r'^# .+\n?', '', body_plus, count=1, flags=re.MULTILINE).strip()
-    if body:
-        return metadata, title, [('', body)]
-    return metadata, title, []
-
-
-def safe_filename(title, max_length=120):
-    name = re.sub(r'[\\/*?:"<>|]', '', title or '')
-    name = re.sub(r'\s+', ' ', name).strip()
-    if len(name) > max_length:
-        name = name[:max_length].rstrip()
-    return name or 'story'
-
-
-def resolve_input_path(input_path):
-    path = Path(input_path)
-    if path.is_dir():
-        story_path = path / 'story.md'
-        if not story_path.exists():
-            raise FileNotFoundError(f'No story.md found in {path}')
-        return story_path
-    return path
-
-
-def resolve_output_path(input_path, title, output_path=None):
-    input_path = Path(input_path)
-    if output_path:
-        return Path(output_path)
-    filename = safe_filename(title)
-    if input_path.is_dir():
-        return input_path / f'{filename}.html'
-    return input_path.with_name(f'{filename}.html')
-
-
-def parse_header_fields(header_fields):
-    if not header_fields:
-        return None
-    return [x.strip() for x in header_fields.split(',') if x.strip()]
-
-
-def looks_meaningful_header_value(value):
-    if value is None:
-        return False
-    value = str(value).strip()
-    if not value:
-        return False
-    if value in {'[]', '{}', '[0, 0]', '[1.0, 1.0]', '0', '0.0'}:
-        return False
-    return True
-
-
-def prettify_field_name(name):
-    pretty_map = {
-        'created_utc': 'Created',
-        'datetime': 'Date',
-        'edit_date': 'Edit Date',
-        'location_text': 'Location',
-        'entry_id': 'Entry ID',
-        'source': 'Source',
-        'source_url': 'Source URL',
-        'year': 'Year',
-        'author': 'Author',
-        'status': 'Status',
-        'tags': 'Tags',
-    }
-    if name in pretty_map:
-        return pretty_map[name]
-    return ' '.join(part.capitalize() for part in name.split('_'))
-
-
-def select_header_items(metadata, header_fields=None):
-    candidate_keys = header_fields if header_fields else list(metadata.keys())
-    items = []
-    for key in candidate_keys:
-        if key not in metadata:
-            continue
-        value = metadata.get(key, '')
-        if not looks_meaningful_header_value(value):
-            continue
-        items.append((prettify_field_name(key), str(value).strip()))
-    return items
-
-
-def find_illustration_image(story_path):
-    entry_dir = Path(story_path).parent
-
-    for name in ('illustration.jpg', 'illustration.jpeg', 'illustration.png'):
-        candidate = entry_dir / name
-        if candidate.exists():
-            return candidate
-
-    images = []
-    for pattern in ('*.jpg', '*.jpeg', '*.png'):
-        images.extend(entry_dir.glob(pattern))
-
-    images = sorted(p for p in images if p.is_file())
-    if len(images) == 1:
-        return images[0]
-    return None
-
-
-def resolve_inline_image_path(story_path, filename):
-    entry_dir = Path(story_path).parent
-    img_path = entry_dir / 'images' / filename
-    if img_path.exists():
-        return img_path
-    return None
-
-
-def parse_inline_image(line):
-    m = INLINE_IMAGE_RE.match(line.strip())
-    if not m:
-        return None
-
-    caption, filename, opts = m.groups()
-    options = {'height_px': None, 'align': 'center'}
-
-    if opts:
-        for part in [p.strip() for p in opts.split() if p.strip()]:
-            if part.startswith('height='):
-                try:
-                    options['height_px'] = int(float(part.split('=', 1)[1]))
-                except Exception:
-                    pass
-            elif part.startswith('align='):
-                val = part.split('=', 1)[1].lower()
-                if val in ('left', 'center', 'right'):
-                    options['align'] = val
-
-    return caption, filename, options
-
-
-def markup_inline(text):
-    text = html.escape(text)
-    text = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', text)
-    text = re.sub(r'(?<!\*)\*(.+?)\*(?!\*)', r'<em>\1</em>', text)
+def convert_inline_markup(text: str) -> str:
+    text = escape_inline(text)
+    text = re.sub(r'!\[([^\]]*)\]\(([^)]+)\)',
+                  lambda m: f'<img src="{html.escape(m.group(2), quote=True)}" alt="{html.escape(m.group(1), quote=True)}">', text)
+    text = re.sub(r'\[([^\]]+)\]\(([^)]+)\)',
+                  lambda m: f'<a href="{html.escape(m.group(2), quote=True)}">{m.group(1)}</a>', text)
+    text = re.sub(r'\*\*([^*]+)\*\*', r'<strong>\1</strong>', text)
+    text = re.sub(r'\*([^*]+)\*', r'<em>\1</em>', text)
+    text = re.sub(r'`([^`]+)`', r'<code>\1</code>', text)
     return text
 
-
-def image_style_attr(height_px=None, align='center'):
-    style_parts = []
-    if height_px:
-        style_parts.append(f'max-height:{int(height_px)}px')
-        style_parts.append('width:auto')
-    else:
-        style_parts.append('max-width:100%')
-        style_parts.append('height:auto')
-
-    if align == 'left':
-        style_parts.append('display:block')
-        style_parts.append('margin:0 0 1em 0')
-    elif align == 'right':
-        style_parts.append('display:block')
-        style_parts.append('margin:0 0 1em auto')
-    else:
-        style_parts.append('display:block')
-        style_parts.append('margin:0 auto 1em auto')
-
-    return '; '.join(style_parts)
+DIALOG_OPEN_RE = re.compile(r'^"""([A-Za-z]\w*)\s*(--.*--)?\s*$', re.MULTILINE)
+DIALOG_CLOSE_RE = re.compile(r'^"""\s*$', re.MULTILINE)
 
 
-def render_rich_text(content, story_path):
-    parts = []
-    lines = content.splitlines()
-    paragraph_buffer = []
-    bullet_buffer = []
+def has_dialog_blocks(text: str) -> bool:
+    """Return True when text contains at least one complete dialogue block."""
+    return bool(DIALOG_OPEN_RE.search(text) and DIALOG_CLOSE_RE.search(text))
 
-    def flush_paragraph():
-        if not paragraph_buffer:
-            return
-        paragraph_text = ' '.join(x.strip() for x in paragraph_buffer if x.strip()).strip()
-        paragraph_buffer.clear()
-        if not paragraph_text:
-            return
 
-        cls = 'story-aside' if paragraph_text.startswith('(') and paragraph_text.endswith(')') else 'story-paragraph'
-        parts.append(f'<p class="{cls}">{markup_inline(paragraph_text)}</p>')
+def preprocess_dialogs(text: str) -> str:
+    """Convert CMS dialogue blocks to ordinary Markdown H3 sections."""
+    lines = text.splitlines(keepends=True)
+    result: List[str] = []
+    in_dialog = False
+    current_char: Optional[str] = None
+    in_paren = False
 
-    def flush_bullets():
-        if not bullet_buffer:
-            return
-        items = []
-        for item in bullet_buffer:
-            item_text = item.strip()
-            if item_text:
-                items.append(f'<li>{markup_inline(item_text)}</li>')
-        bullet_buffer.clear()
-        if items:
-            parts.append('<ul>\n' + '\n'.join(items) + '\n</ul>')
-
-    for raw_line in lines:
-        line = raw_line.strip()
-
-        if not line:
-            flush_paragraph()
-            flush_bullets()
+    for line in lines:
+        match = DIALOG_OPEN_RE.match(line)
+        if match:
+            current_char = match.group(1)
+            result.append(f"### {current_char}\n")
+            in_dialog = True
+            in_paren = False
             continue
 
-        if line.startswith('* '):
-            flush_paragraph()
-            bullet_buffer.append(line[2:].strip())
+        if DIALOG_CLOSE_RE.match(line):
+            in_dialog = False
+            current_char = None
+            in_paren = False
             continue
 
-        parsed = parse_inline_image(line)
-        if parsed:
-            flush_paragraph()
-            flush_bullets()
+        if in_dialog and current_char and current_char.lower() == "ai":
+            stripped = line.lstrip()
+            if in_paren:
+                if ")" in stripped:
+                    in_paren = False
+                continue
+            if stripped.startswith("("):
+                if ")" not in stripped:
+                    in_paren = True
+                    continue
+                if re.search(r'\)[\.,!?;:]*\s*$', stripped):
+                    continue
 
-            caption, filename, opts = parsed
-            img_path = resolve_inline_image_path(story_path, filename)
+        result.append(line)
 
-            if img_path:
-                rel_src = f'images/{filename}'
-                style_attr = image_style_attr(opts['height_px'], opts['align'])
-                parts.append(f'<img src="{html.escape(rel_src)}" alt="{html.escape(caption)}" style="{style_attr}">')
-                if caption:
-                    parts.append(f'<p class="image-caption">{markup_inline(caption)}</p>')
+    return "".join(result)
+
+
+def markdown_to_html(md_text: str) -> Tuple[str, Optional[str]]:
+    lines = md_text.splitlines()
+    blocks: List[str] = []
+    paragraph_lines: List[str] = []
+    list_items: List[str] = []
+    in_code = False
+    code_lines: List[str] = []
+    first_h1: Optional[str] = None
+
+    def flush_paragraph() -> None:
+        nonlocal paragraph_lines
+        if paragraph_lines:
+            para = " ".join(x.strip() for x in paragraph_lines if x.strip())
+            if para:
+                blocks.append(f"<p>{convert_inline_markup(para)}</p>")
+            paragraph_lines = []
+
+    def flush_list() -> None:
+        nonlocal list_items
+        if list_items:
+            items_html = "".join(f"<li>{convert_inline_markup(item)}</li>" for item in list_items)
+            blocks.append(f"<ul>{items_html}</ul>")
+            list_items = []
+
+    def flush_code() -> None:
+        nonlocal code_lines
+        if code_lines:
+            code = "\n".join(code_lines)
+            blocks.append(f"<pre><code>{html.escape(code)}</code></pre>")
+            code_lines = []
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            flush_paragraph(); flush_list()
+            if in_code:
+                flush_code(); in_code = False
+            else:
+                in_code = True
             continue
+        if in_code:
+            code_lines.append(line); continue
+        if not stripped:
+            flush_paragraph(); flush_list(); continue
+        if stripped.startswith("### "):
+            flush_paragraph(); flush_list()
+            blocks.append(f"<h3>{convert_inline_markup(stripped[4:].strip())}</h3>"); continue
+        if stripped.startswith("## "):
+            flush_paragraph(); flush_list()
+            blocks.append(f"<h2>{convert_inline_markup(stripped[3:].strip())}</h2>"); continue
+        if stripped.startswith("# "):
+            flush_paragraph(); flush_list()
+            heading = stripped[2:].strip()
+            if first_h1 is None:
+                first_h1 = heading
+            blocks.append(f"<h1>{convert_inline_markup(heading)}</h1>"); continue
+        if stripped.startswith(">"):
+            flush_paragraph(); flush_list()
+            blocks.append(f"<blockquote>{convert_inline_markup(stripped[1:].strip())}</blockquote>"); continue
+        if stripped in ("---", "***"):
+            flush_paragraph(); flush_list(); blocks.append("<hr>"); continue
+        if stripped.startswith(("- ", "* ")):
+            flush_paragraph(); list_items.append(stripped[2:].strip()); continue
+        paragraph_lines.append(line)
 
-        if line.endswith(':'):
-            flush_paragraph()
-            flush_bullets()
-            paragraph_buffer.append(line)
-            flush_paragraph()
-            continue
+    flush_paragraph(); flush_list()
+    if in_code:
+        flush_code()
+    return "\n".join(blocks), first_h1
 
-        flush_bullets()
-        paragraph_buffer.append(line)
+def resolve_story_path(input_value: str) -> Path:
+    path = Path(input_value)
+    return path / "story.md" if path.is_dir() else path
 
-    flush_paragraph()
-    flush_bullets()
-    return '\n'.join(parts)
-
-
-def render_html_document(
-    metadata,
-    title,
-    blocks,
-    story_path,
-    header_fields=None,
-    illustration_path=None,
-    image_height_px=420,
-    image_align='center',
-    fragment=False,
-):
-    header_items = select_header_items(metadata or {}, header_fields=header_fields)
-
-    body = []
-    body.append('<article class="story-entry">')
-    body.append(f'<h1>{markup_inline(title)}</h1>')
-
-    if header_items:
-        body.append('<div class="story-header-fields">')
-        for label, value in header_items:
-            body.append(f'<p class="story-header-field"><strong>{html.escape(label)}:</strong> {markup_inline(value)}</p>')
-        body.append('</div>')
-
-    if illustration_path is not None:
-        rel_src = html.escape(illustration_path.name)
-        style_attr = image_style_attr(image_height_px, image_align)
-        body.append(f'<img src="{rel_src}" alt="Illustration" class="story-illustration" style="{style_attr}">')
-
-    if len(blocks) == 1 and not blocks[0][0].strip():
-        body.append(render_rich_text(blocks[0][1], story_path))
-    else:
-        for speaker, content in blocks:
-            body.append('<section class="story-block">')
-            if speaker.strip():
-                body.append(f'<h2>{html.escape(speaker)}</h2>')
-            body.append(render_rich_text(content, story_path))
-            body.append('</section>')
-
-    body.append('</article>')
-    article_html = '\n'.join(body)
-
-    if fragment:
-        return article_html
-
-    return f'''<!doctype html>
-<html lang="en">
+def build_plain_html(title: str, body_html: str) -> str:
+    return f"""<html>
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{html.escape(title)}</title>
 </head>
 <body>
-{article_html}
+{body_html}
 </body>
 </html>
-'''
+"""
+
+def get_jinja_env(templates_dir: Path):
+    if Environment is None:
+        raise RuntimeError("Jinja2 is not installed. Install jinja2 or use --plain-html.")
+    return Environment(loader=FileSystemLoader(str(templates_dir)),
+                       autoescape=select_autoescape(["html", "xml"]))
+
+def render_story_with_template(*, templates_dir: Path, page_title: str, body_html: str,
+                               metadata: Dict[str, str], back_link: Optional[str]) -> str:
+    env = get_jinja_env(templates_dir)
+    t = env.get_template("story.html.j2")
+    return t.render(page_title=page_title, body_html=body_html, metadata=metadata, back_link=back_link)
+
+def render_index_with_template(*, templates_dir: Path, page_title: str, items: List[Dict[str, str]]) -> str:
+    env = get_jinja_env(templates_dir)
+    t = env.get_template("index.html.j2")
+    return t.render(page_title=page_title, index_title=page_title, items=items)
+
+def render_index_plain(page_title: str, items: List[Dict[str, str]]) -> str:
+    lines = ["<html>", "<head>", '  <meta charset="utf-8">', f"  <title>{html.escape(page_title)}</title>",
+             "</head>", "<body>", f"  <h1>{html.escape(page_title)}</h1>", "  <ul>"]
+    for item in items:
+        title = html.escape(item["title"])
+        href = html.escape(item["href"], quote=True)
+        entry_id = html.escape(item["entry_id"])
+        dp = html.escape(item.get("date_published", ""))
+        suffix = f" — {dp}" if dp else ""
+        lines.append(f'    <li><a href="{href}">{title}</a> <small>({entry_id}{suffix})</small></li>')
+    lines += ["  </ul>", "</body>", "</html>"]
+    return "\n".join(lines)
+
+def build_index_items(cms_dir: Path, published_json: Path) -> List[Dict[str, str]]:
+    if not published_json.exists():
+        raise FileNotFoundError(f"Missing publishedcms.json: {published_json}")
+    data = json.loads(published_json.read_text(encoding="utf-8"))
+    if not isinstance(data, list):
+        raise ValueError("published.json must contain a list.")
+    items: List[Dict[str, str]] = []
+    for obj in data:
+        if not isinstance(obj, dict):
+            continue
+        entry_id = str(obj.get("entry", "")).strip()
+        if not entry_id:
+            continue
+        story_md = cms_dir / entry_id / "story.md"
+        if not story_md.exists():
+            continue
+        story_text = story_md.read_text(encoding="utf-8")
+        frontmatter, remainder = split_frontmatter(story_text)
+        metadata = parse_simple_yaml(frontmatter)
+        if has_dialog_blocks(remainder):
+            remainder = preprocess_dialogs(remainder)
+        _, first_h1 = markdown_to_html(remainder)
+        title = first_h1 or metadata.get("title") or entry_id
+        items.append({"entry_id": entry_id, "title": title, "href": f"{entry_id}.html",
+                      "date_published": str(obj.get("date_published", "")).strip()})
+    items.sort(key=lambda x: x.get("date_published", ""), reverse=True)
+    return items
 
 
-def generate_html(
-    input_path='.',
-    output_path=None,
-    fragment=False,
-    header_fields=None,
-    image_height_px=420,
-    image_align='center',
-):
-    story_path = resolve_input_path(input_path)
-    text = story_path.read_text(encoding='utf-8')
-    metadata, title, blocks = parse_story(text)
-
-    output_path = resolve_output_path(input_path, title, output_path)
-    illustration_path = find_illustration_image(story_path)
-    parsed_header_fields = parse_header_fields(header_fields)
-
-    html_text = render_html_document(
-        metadata=metadata,
-        title=title,
-        blocks=blocks,
-        story_path=story_path,
-        header_fields=parsed_header_fields,
-        illustration_path=illustration_path,
-        image_height_px=image_height_px,
-        image_align=image_align,
-        fragment=fragment,
-    )
-
-    Path(output_path).write_text(html_text, encoding='utf-8')
-    return output_path
+def safe_filename(value: str) -> str:
+    cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '-', str(value))
+    cleaned = re.sub(r"\s+", " ", cleaned).strip().strip('.')
+    return cleaned or 'story'
 
 
-def main(args=None):
-    if args is None:
-        args = sys.argv[1:]
-
-    fragment = False
-    header_fields = None
-    image_height_px = 420
-    image_align = 'center'
-
-    positional = []
-    i = 0
-    while i < len(args):
-        if args[i] == '--fragment':
-            fragment = True
-            i += 1
-        elif args[i] == '--header-fields' and i + 1 < len(args):
-            header_fields = args[i + 1]
-            i += 2
-        elif args[i] == '--image-height-px' and i + 1 < len(args):
-            image_height_px = int(float(args[i + 1]))
-            i += 2
-        elif args[i] == '--image-align' and i + 1 < len(args):
-            image_align = args[i + 1].lower()
-            i += 2
-        else:
-            positional.append(args[i])
-            i += 1
-
-    input_path = positional[0] if len(positional) >= 1 else '.'
-    output_path = positional[1] if len(positional) >= 2 else None
-
-    out = generate_html(
-        input_path=input_path,
-        output_path=output_path,
-        fragment=fragment,
-        header_fields=header_fields,
-        image_height_px=image_height_px,
-        image_align=image_align,
-    )
-    print(f'Wrote: {out}')
+def parse_story(story_text: str):
+    frontmatter, remainder = split_frontmatter(story_text)
+    metadata = parse_simple_yaml(frontmatter)
+    title = metadata.get('title', '')
+    body_lines = []
+    for line in remainder.splitlines():
+        if not title and line.startswith('# '):
+            title = line[2:].strip()
+            continue
+        body_lines.append(line)
+    return metadata, title or 'Story', body_lines
 
 
-if __name__ == '__main__':
-    main()
+def select_header_items(metadata: Dict[str, str], header_fields: Optional[List[str]] = None) -> List[Tuple[str, str]]:
+    labels = {'location':'Location','location_text':'Location','source':'Source','datetime':'Date','date':'Date','created_utc':'Created','published_utc':'Published','status':'Status'}
+    keys = header_fields or ['location_text','location','datetime','source']
+    out=[]
+    for key in keys:
+        value=str(metadata.get(key,'')).strip()
+        if value:
+            out.append((labels.get(key,key.replace('_',' ').title()), value))
+    return out
+
+
+def find_illustration_image(story_file: Path | str) -> Optional[Path]:
+    story_path=Path(story_file)
+    entry_dir=story_path.parent
+    for name in ('illustration.png','illustration.jpg','illustration.jpeg','illustration.webp','illustration.gif'):
+        p=entry_dir/name
+        if p.exists(): return p
+    exts={'.png','.jpg','.jpeg','.webp','.gif','.svg'}
+    candidates=[p for p in sorted(entry_dir.iterdir()) if p.is_file() and p.suffix.lower() in exts]
+    return candidates[0] if len(candidates)==1 else None
+
+
+INLINE_IMAGE_RE = re.compile(r'^!\[([^\]]*)\]\(([^)]+)\)(?:\{([^}]*)\})?\s*$')
+
+
+def parse_inline_image(line: str):
+    m=INLINE_IMAGE_RE.match(line.strip())
+    if not m: return None
+    caption=m.group(1).strip(); filename=m.group(2).strip(); raw=m.group(3) or ''
+    options={}
+    for token in raw.split():
+        if '=' not in token: continue
+        key,value=token.split('=',1); key=key.strip().lower(); value=value.strip().strip('"').strip("'")
+        if key=='height':
+            try: options['height_px']=int(value)
+            except ValueError: pass
+        elif key=='align' and value in {'left','right','center'}:
+            options['align']=value
+    return caption, filename, options
+
+
+def resolve_inline_image_path(story_file: Path | str, filename: str) -> Path:
+    story_path=Path(story_file)
+    direct=story_path.parent/filename
+    if direct.exists(): return direct
+    return story_path.parent/'images'/filename
+
+
+def _inline_image_html(story_file: Path, caption: str, filename: str, options: Dict[str, object]) -> str:
+    image_path=resolve_inline_image_path(story_file, filename)
+    try: src=image_path.relative_to(story_file.parent).as_posix()
+    except ValueError: src=image_path.as_posix()
+    styles=[]
+    h=options.get('height_px')
+    if isinstance(h,int): styles.append(f'max-height:{h}px')
+    align=options.get('align')
+    if align=='right': styles += ['display:block','margin:0 0 1em auto']
+    elif align=='left': styles += ['display:block','margin:0 auto 1em 0']
+    elif align=='center': styles += ['display:block','margin:0 auto 1em auto']
+    style_attr=f' style="{html.escape(";".join(styles), quote=True)}"' if styles else ''
+    return f'<figure class="story-inline-image"><img src="{html.escape(src,quote=True)}" alt="{html.escape(caption,quote=True)}"{style_attr}><figcaption>{html.escape(caption)}</figcaption></figure>'
+
+
+def _compat_story_body_html(story_file: Path, body_text: str) -> str:
+    if has_dialog_blocks(body_text): body_text=preprocess_dialogs(body_text)
+    out=[]; para=[]; items=[]
+    def flush_para():
+        nonlocal para
+        if para:
+            content=' '.join(x.strip() for x in para if x.strip())
+            if content: out.append(f'<p class="story-paragraph">{convert_inline_markup(content)}</p>')
+            para=[]
+    def flush_items():
+        nonlocal items
+        if items:
+            out.append('<ul>'+''.join(f'<li>{convert_inline_markup(i)}</li>' for i in items)+'</ul>')
+            items=[]
+    for line in body_text.splitlines():
+        s=line.strip()
+        if not s: flush_para(); flush_items(); continue
+        parsed=parse_inline_image(s)
+        if parsed:
+            flush_para(); flush_items(); out.append(_inline_image_html(story_file,*parsed)); continue
+        if s.startswith('### '): flush_para(); flush_items(); out.append(f'<h2>{convert_inline_markup(s[4:].strip())}</h2>'); continue
+        if s.startswith('## '): flush_para(); flush_items(); out.append(f'<h2>{convert_inline_markup(s[3:].strip())}</h2>'); continue
+        if s.startswith('# '): flush_para(); flush_items(); continue
+        if s.startswith(('- ','* ')): flush_para(); items.append(s[2:].strip()); continue
+        para.append(line)
+    flush_para(); flush_items(); return '\n'.join(out)
+
+
+def generate_html(story_file: Path | str | None = None, *, output: Path | str | None = None, fragment: bool = False, header_fields: Optional[List[str]] = None) -> str:
+    story_path=Path(story_file or 'story.md').expanduser().resolve()
+    if story_path.is_dir(): story_path=story_path/'story.md'
+    if not story_path.exists(): raise FileNotFoundError(f'Missing story.md: {story_path}')
+    story_text=story_path.read_text(encoding='utf-8')
+    metadata,title,_=parse_story(story_text)
+    _,remainder=split_frontmatter(story_text)
+    body_html=_compat_story_body_html(story_path,remainder)
+    header_items=select_header_items(metadata,header_fields)
+    header_html=''
+    if header_items:
+        header_html='<dl class="story-metadata">'+''.join(f'<dt>{html.escape(l)}</dt><dd>{html.escape(v)}</dd>' for l,v in header_items)+'</dl>'
+    article=f'<article class="story"><h1>{html.escape(title)}</h1>{header_html}{body_html}</article>'
+    html_text=article if fragment else f'<!doctype html>\n<html>\n<head>\n  <meta charset="utf-8">\n  <title>{html.escape(title)}</title>\n</head>\n<body>\n{article}\n</body>\n</html>\n'
+    output_path=Path(output).expanduser().resolve() if output is not None else story_path.parent/f'{safe_filename(title)}.html'
+    output_path.write_text(html_text,encoding='utf-8')
+    return str(output_path)
+
+def main() -> int:
+    args = parse_args()
+    templates_dir = Path(args.templates_dir).expanduser().resolve()
+    cms_dir = Path(args.cms_dir).expanduser().resolve()
+    published_json = Path(args.published_json).expanduser().resolve()
+
+    if args.index:
+        items = build_index_items(cms_dir, published_json)
+        output_path = Path(args.output) if args.output else Path("index.html")
+        html_text = render_index_plain(args.site_title, items) if args.plain_html else \
+                    render_index_with_template(templates_dir=templates_dir, page_title=args.site_title, items=items)
+        output_path.write_text(html_text, encoding="utf-8")
+        print(f"Wrote: {output_path}")
+        print(f"Entries: {len(items)}")
+        return 0
+
+    story_path = resolve_story_path(args.input).expanduser().resolve()
+    if not story_path.exists():
+        raise FileNotFoundError(f"Missing story.md: {story_path}")
+    story_text = story_path.read_text(encoding="utf-8")
+    frontmatter, remainder = split_frontmatter(story_text)
+    metadata = parse_simple_yaml(frontmatter)
+    if has_dialog_blocks(remainder):
+        remainder = preprocess_dialogs(remainder)
+    body_html, first_h1 = markdown_to_html(remainder)
+    story_title = first_h1 or metadata.get("title") or story_path.parent.name or "Story"
+    output_path = Path(args.output) if args.output else story_path.with_suffix(".html")
+    html_text = build_plain_html(story_title, body_html) if args.plain_html else \
+                render_story_with_template(templates_dir=templates_dir, page_title=story_title,
+                                           body_html=body_html, metadata=metadata,
+                                           back_link="/")
+    output_path.write_text(html_text, encoding="utf-8")
+    print(f"Wrote: {output_path}")
+    return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main())

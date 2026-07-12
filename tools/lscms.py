@@ -7,7 +7,7 @@ Default behavior:
 - Uses [cms] cms_dir from config unless overridden with --cms
 - Scans entry-* directories
 - Computes a "last activity" timestamp from meaningful content files
-- Extracts a human title from story.md (or other root .md files)
+- Extracts title/type metadata from story.md, story-members.md, or story-free.md in that order
 - Prints newest-first, limited output
 
 Examples:
@@ -41,14 +41,21 @@ TOOLS_DIR = REPO_ROOT / "tools"
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(TOOLS_DIR))
 
-from config import load_app_config
+from config import default_config_path, load_app_config
 
+CONFIG_PATH = default_config_path()
 console = Console()
 ENTRY_RE = re.compile(r"^entry-(\d+)$")
 YAML_KEY_RE = re.compile(r"^([A-Za-z0-9_-]+)\s*:\s*(.*)$")
 
-ROOT_PRIORITY_FILES = [
+STORY_PRIORITY_FILES = [
     "story.md",
+    "story-members.md",
+    "story-free.md",
+]
+
+ROOT_PRIORITY_FILES = [
+    *STORY_PRIORITY_FILES,
     "interview.md",
     "chat.md",
     "video.md",
@@ -351,8 +358,8 @@ def fmt_iso(epoch: float) -> str:
 def build_entry_info(
     entry_dir: Path,
     current_entry: Optional[str],
-    type_map: dict[str, str],
-    ) -> EntryInfo:
+    type_map: Optional[dict[str, str]] = None,
+) -> EntryInfo:
 
     modified = choose_activity_timestamp(entry_dir)
     created = choose_created_timestamp(entry_dir)
@@ -360,7 +367,7 @@ def build_entry_info(
     return EntryInfo(
         entry_id=entry_id,
         path=str(entry_dir),
-        type_code=extract_type(entry_dir, type_map),
+        type_code=extract_type(entry_dir, type_map or {}),
         title=extract_title(entry_dir),
         last_activity_iso=fmt_iso(modified),
         last_activity_epoch=modified,
@@ -432,9 +439,19 @@ def render_rich(entries: List[EntryInfo], long_output: bool, sort_key: str, cms_
         )
     )
 
+
+def find_primary_story_file(entry_dir: Path) -> Optional[Path]:
+    """Return the highest-priority story file available for listing metadata."""
+    for name in STORY_PRIORITY_FILES:
+        candidate = entry_dir / name
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 def extract_type(entry_dir: Path, type_map: dict[str, str]) -> str:
-    story = entry_dir / "story.md"
-    if not story.exists():
+    story = find_primary_story_file(entry_dir)
+    if story is None:
         return "?"
 
     try:
@@ -487,7 +504,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         eprint("--days must be >= 0")
         return 2
 
-    cfg, cfg_path, paths = load_app_config(args.config)
+    config_path = args.config if args.config is not None else str(CONFIG_PATH)
+    cfg, cfg_path, paths = load_app_config(config_path)
     cms_dir = resolve_cms_dir(args, paths)
     current_entry = get_current_entry(cfg)
     type_map = load_entry_type_map(cfg)

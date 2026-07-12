@@ -3,69 +3,167 @@
 addaistorytext.py
 
 Import simple AI terminal transcripts (>>> / ... prompt style)
-into the heichalot CMS story format.
+into one or more Heichalot CMS story files.
 
-Usage:
+By default, an entry may contain:
 
-    python tools/addaistorytext.py
-    python tools/addaistorytext.py cms/entry-0000038
-    python tools/addaistorytext.py cms/entry-0000038 --image ~/Screenshots/shot.png
-    python tools/addaistorytext.py cms/entry-0000038 --input-file transcript.txt
+    story-free.md
+    story-members.md
+    story.md
 
-Transcript input is read from stdin by default.
+When more than one of those files exists, the user is asked which files should
+receive the pasted transcript before stdin is read.
 """
 
-import sys
-import os
+from __future__ import annotations
+
 import argparse
 import configparser
+import os
 import shutil
-from pathlib import Path
+import sys
+from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
+from typing import Iterable, List, Sequence
+
+try:
+    from rich.console import Console
+    from rich.prompt import Confirm
+except Exception:  # pragma: no cover - plain-terminal fallback
+    Console = None
+    Confirm = None
+
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
+DEFAULT_STORY_FILENAMES = (
+    "story-free.md",
+    "story-members.md",
+    "story.md",
+)
+
+console = Console() if Console is not None else None
 
 
-def read_config():
+@dataclass(frozen=True)
+class AddAIStorySettings:
+    story_filenames: tuple[str, ...]
+    default_tags: tuple[str, ...]
+    image_mode: str = "move"
+
+
+def _candidate_config_paths() -> list[Path]:
+    paths: list[Path] = []
+
+    # Preferred shared configuration location.
+    try:
+        from config import default_config_path
+        paths.append(Path(default_config_path()).expanduser())
+    except Exception:
+        paths.append(Path.home() / ".heichalotcms" / "config.ini")
+
+    # Retain the historical local fallbacks for tests and portable checkouts.
+    paths.extend(
+        [
+            Path("./heichalotcms/config.ini"),
+            Path("./config.ini"),
+        ]
+    )
+
+    out: list[Path] = []
+    seen: set[Path] = set()
+    for path in paths:
+        resolved = path.expanduser()
+        if resolved not in seen:
+            out.append(resolved)
+            seen.add(resolved)
+    return out
+
+
+def _load_config_parser() -> tuple[configparser.ConfigParser, Path | None]:
     config = configparser.ConfigParser()
-    possible_paths = [
-        "./heichalotcms/config.ini",
-        "./config.ini",
-    ]
 
-    for path in possible_paths:
-        if os.path.exists(path):
-            config.read(path)
-            break
+    for path in _candidate_config_paths():
+        if path.exists():
+            config.read(path, encoding="utf-8")
+            return config, path
 
-    story_filename = "story.md"
-    default_tags = []
+    return config, None
+
+
+def _split_story_filenames(value: str) -> tuple[str, ...]:
+    names = tuple(
+        item.strip()
+        for item in value.split(",")
+        if item.strip()
+    )
+    return names or DEFAULT_STORY_FILENAMES
+
+
+def read_settings() -> AddAIStorySettings:
+    """Read shared configuration while retaining sensible standalone defaults."""
+    config, _config_path = _load_config_parser()
+
+    story_filenames: tuple[str, ...] = DEFAULT_STORY_FILENAMES
+    default_tags: tuple[str, ...] = ()
     image_mode = "move"
 
-    if "cms" in config and "story_filename" in config["cms"]:
-        story_filename = config["cms"]["story_filename"]
+    if "cms" in config:
+        cms = config["cms"]
+
+        # New plural form, suitable for the three publishing levels.
+        plural = cms.get("story_filenames", "").strip()
+        if plural:
+            story_filenames = _split_story_filenames(plural)
+        else:
+            # Historical singular override remains supported.
+            singular = cms.get("story_filename", "").strip()
+            if singular:
+                story_filenames = (singular,)
 
     if "tags" in config and "default_story_tags" in config["tags"]:
-        default_tags = [
-            t.strip()
-            for t in config["tags"]["default_story_tags"].split(",")
-            if t.strip()
-        ]
+        default_tags = tuple(
+            tag.strip()
+            for tag in config["tags"]["default_story_tags"].split(",")
+            if tag.strip()
+        )
 
-    if "addaistory" in config and "image_mode" in config["addaistory"]:
-        value = config["addaistory"]["image_mode"].strip().lower()
+    if "addaistory" in config:
+        value = config["addaistory"].get("image_mode", "move").strip().lower()
         if value in {"move", "copy"}:
             image_mode = value
 
-    return story_filename, default_tags, image_mode
+        configured_files = config["addaistory"].get("story_filenames", "").strip()
+        if configured_files:
+            story_filenames = _split_story_filenames(configured_files)
+
+    return AddAIStorySettings(
+        story_filenames=story_filenames,
+        default_tags=default_tags,
+        image_mode=image_mode,
+    )
+
+
+def read_config():
+    """Legacy two-value API retained for existing callers and tests."""
+    settings = read_settings()
+    story_filename = (
+        settings.story_filenames[0]
+        if len(settings.story_filenames) == 1
+        else "story.md"
+    )
+    return story_filename, list(settings.default_tags)
 
 
 def read_input(path):
     if path:
-        with open(path, "r", encoding="utf-8") as f:
-            return f.read()
+        with open(path, "r", encoding="utf-8") as handle:
+            return handle.read()
 
-    print("Paste transcript (Ctrl-D to finish):")
+    if console:
+        console.print("[bold]Paste transcript[/bold] [dim](Ctrl-D to finish)[/dim]:")
+    else:
+        print("Paste transcript (Ctrl-D to finish):")
     return sys.stdin.read()
 
 
@@ -137,24 +235,24 @@ def ensure_tags(path, tags):
         parent = os.path.dirname(path)
         if parent:
             os.makedirs(parent, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            f.write('"""Tags\n')
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write('"""Tags\n')
             for tag in tags:
-                f.write(f"{tag}\n")
-            f.write("\n")
+                handle.write(f"{tag}\n")
+            handle.write("\n")
         return
 
-    with open(path, "r", encoding="utf-8") as f:
-        content = f.read()
+    with open(path, "r", encoding="utf-8") as handle:
+        content = handle.read()
 
     if '"""Tags' in content:
         return
 
-    with open(path, "a", encoding="utf-8") as f:
-        f.write('\n"""Tags\n')
+    with open(path, "a", encoding="utf-8") as handle:
+        handle.write('\n"""Tags\n')
         for tag in tags:
-            f.write(f"{tag}\n")
-        f.write("\n")
+            handle.write(f"{tag}\n")
+        handle.write("\n")
 
 
 def append_story(path, text):
@@ -162,20 +260,20 @@ def append_story(path, text):
     parent = os.path.dirname(path)
     if parent:
         os.makedirs(parent, exist_ok=True)
-    with open(path, "a", encoding="utf-8") as f:
-        f.write("\n")
-        f.write(text)
-        f.write("\n")
+    with open(path, "a", encoding="utf-8") as handle:
+        handle.write("\n")
+        handle.write(text)
+        handle.write("\n")
 
 
 def has_top_level_image(target_dir):
     target = Path(target_dir)
     if not target.exists():
         return False
-    for item in target.iterdir():
-        if item.is_file() and item.suffix.lower() in IMAGE_EXTS:
-            return True
-    return False
+    return any(
+        item.is_file() and item.suffix.lower() in IMAGE_EXTS
+        for item in target.iterdir()
+    )
 
 
 def unique_destination(path):
@@ -216,7 +314,10 @@ def import_image(image_path, target_dir, image_mode="move"):
         shutil.move(str(source), str(dest))
         action = "Moved"
 
-    print(f"{action} image to {dest}")
+    if console:
+        console.print(f"[green]{action}[/green] image to {dest}")
+    else:
+        print(f"{action} image to {dest}")
     return str(dest)
 
 
@@ -229,33 +330,143 @@ def write_debate(text):
     ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     filename = f"debate/{ts}.md"
 
-    with open(filename, "w", encoding="utf-8") as f:
-        f.write("---\n")
-        f.write("origin: addaistorytext\n")
-        f.write(f"timestamp: {datetime.now().isoformat()}\n")
-        f.write("---\n\n")
-        f.write(text)
+    with open(filename, "w", encoding="utf-8") as handle:
+        handle.write("---\n")
+        handle.write("origin: addaistorytext\n")
+        handle.write(f"timestamp: {datetime.now().isoformat()}\n")
+        handle.write("---\n\n")
+        handle.write(text)
 
-    print(f"Wrote debate file: {filename}")
+    if console:
+        console.print(f"[green]Wrote debate file:[/green] {filename}")
+    else:
+        print(f"Wrote debate file: {filename}")
+
+
+def discover_story_files(
+    target_dir: Path | str,
+    story_filenames: Sequence[str] = DEFAULT_STORY_FILENAMES,
+) -> list[Path]:
+    target = Path(target_dir)
+    return [
+        target / filename
+        for filename in story_filenames
+        if (target / filename).is_file()
+    ]
+
+
+def _confirm_update(path: Path) -> bool:
+    prompt = f"Update {path.name}?"
+
+    if Confirm is not None:
+        return Confirm.ask(prompt, default=False)
+
+    response = input(f"{prompt} [y/N]: ").strip().lower()
+    return response in {"y", "yes"}
+
+
+def select_story_files(
+    target_dir: Path | str,
+    story_filenames: Sequence[str] = DEFAULT_STORY_FILENAMES,
+    *,
+    confirm_fn=None,
+) -> list[Path]:
+    """Prompt for each existing story level before transcript input is read."""
+    target = Path(target_dir)
+    existing = discover_story_files(target, story_filenames)
+
+    if not existing:
+        fallback_name = (
+            story_filenames[-1]
+            if story_filenames
+            else "story.md"
+        )
+        fallback = target / fallback_name
+        if console:
+            console.print(
+                f"[yellow]No configured story files exist.[/yellow] "
+                f"Creating {fallback.name}."
+            )
+        else:
+            print(f"No configured story files exist. Creating {fallback.name}.")
+        return [fallback]
+
+    ask = confirm_fn or _confirm_update
+    selected = [path for path in existing if ask(path)]
+
+    if not selected:
+        raise SystemExit("No story files selected.")
+
+    return selected
+
+
+def _resolve_cli_paths(args) -> tuple[Path, str | None]:
+    """Support both the historical target-dir CLI and older test/file usage."""
+    positional = Path(args.target_or_input).expanduser()
+
+    if args.story:
+        story_path = Path(args.story).expanduser().resolve()
+        input_file = args.input_file
+
+        if input_file is None and positional != Path(".") and positional.is_file():
+            input_file = str(positional)
+
+        return story_path.parent, input_file
+
+    if args.input_file:
+        return positional.resolve(), args.input_file
+
+    if positional.is_file():
+        return Path.cwd().resolve(), str(positional.resolve())
+
+    return positional.resolve(), None
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("target_dir", nargs="?", default=".", help="target CMS entry directory")
+    parser.add_argument(
+        "target_or_input",
+        nargs="?",
+        default=".",
+        help="target CMS entry directory, or transcript file when --story is used",
+    )
     parser.add_argument("--input-file", help="read transcript from file instead of stdin")
+    parser.add_argument("--story", help="write only to this explicit story file")
     parser.add_argument("--image", help="import image into the target entry directory")
     parser.add_argument("--debate", action="store_true", help="write a new debate file")
     args = parser.parse_args()
 
-    story_filename, tags, image_mode = read_config()
-    story_path = resolve_story_path(args.target_dir, story_filename)
+    settings = read_settings()
 
-    text = read_input(args.input_file)
+    # Preserve compatibility with callers and tests that override read_config()
+    # when --story selects one explicit destination file.
+    if args.story:
+        _legacy_story_filename, legacy_tags = read_config()
+        settings = AddAIStorySettings(
+            story_filenames=settings.story_filenames,
+            default_tags=tuple(legacy_tags),
+            image_mode=settings.image_mode,
+        )
+
+    target_dir, input_file = _resolve_cli_paths(args)
+
+    if args.story:
+        selected_story_paths = [Path(args.story).expanduser().resolve()]
+    elif args.debate:
+        selected_story_paths = []
+    else:
+        selected_story_paths = select_story_files(
+            target_dir,
+            settings.story_filenames,
+        )
+
+    # Selection happens before prompting for pasted stdin.
+    text = read_input(input_file)
     blocks = parse_transcript(text)
 
     if not blocks:
         print("No >>> prompts found.")
-        sys.exit(1)
+        raise SystemExit(1)
 
     rendered = render_blocks(blocks)
 
@@ -263,14 +474,20 @@ def main():
         write_debate(rendered)
         return
 
-    ensure_tags(story_path, tags)
-    append_story(story_path, rendered)
+    for story_path in selected_story_paths:
+        ensure_tags(story_path, settings.default_tags)
+        append_story(story_path, rendered)
 
     if args.image:
-        import_image(args.image, args.target_dir, image_mode)
+        import_image(args.image, target_dir, settings.image_mode)
 
-    print(f"Appended {len(blocks)} block(s) to {story_path}")
-
+    names = ", ".join(str(path) for path in selected_story_paths)
+    if console:
+        console.print(
+            f"[green]Appended {len(blocks)} block(s)[/green] to {names}"
+        )
+    else:
+        print(f"Appended {len(blocks)} block(s) to {names}")
 
 if __name__ == "__main__":
     main()

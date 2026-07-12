@@ -17,9 +17,7 @@ to the correct archive.
 from __future__ import annotations
 
 import argparse
-import html
 import json
-import re
 import shutil
 import sys
 import tempfile
@@ -29,7 +27,7 @@ import sqlite3
 from datetime import datetime, timezone
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional
 from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin
 from urllib.request import Request, build_opener
@@ -47,10 +45,16 @@ sys.path.insert(0, str(TOOLS_DIR))
 
 try:
     from config import load_app_config
+    from renderhtml import (
+        has_dialog_blocks,
+        markdown_to_html,
+        preprocess_dialogs,
+    )
 except Exception as exc:  # pragma: no cover - user-facing startup error
     raise SystemExit(
-        "ERROR: Could not import tools/config.py. Run from the Heichalot-CMS "
-        "repository or install the package with: pip install -e ."
+        "ERROR: Could not import tools/config.py or tools/renderhtml.py. "
+        "Run from the Heichalot-CMS repository or install the package with: "
+        "pip install -e ."
     ) from exc
 
 DEFAULT_UPDATE_URL = "https://heichalot.tech/cms/"
@@ -188,176 +192,6 @@ def title_from_story(data: dict, body: str, entry_id: str) -> str:
             return line[2:].strip()
 
     return entry_id
-
-def escape_inline(text: str) -> str:
-    return html.escape(text, quote=False)
-
-
-def convert_inline_markup(text: str) -> str:
-    text = escape_inline(text)
-    text = re.sub(
-        r'!\[([^\]]*)\]\(([^)]+)\)',
-        lambda m: f'<img src="{html.escape(m.group(2), quote=True)}" alt="{html.escape(m.group(1), quote=True)}">',
-        text,
-    )
-    text = re.sub(
-        r'\[([^\]]+)\]\(([^)]+)\)',
-        lambda m: f'<a href="{html.escape(m.group(2), quote=True)}">{m.group(1)}</a>',
-        text,
-    )
-    text = re.sub(r'\*\*([^*]+)\*\*', r'<strong>\1</strong>', text)
-    text = re.sub(r'\*([^*]+)\*', r'<em>\1</em>', text)
-    text = re.sub(r'`([^`]+)`', r'<code>\1</code>', text)
-    return text
-
-
-def markdown_to_html(md_text: str) -> Tuple[str, Optional[str]]:
-    lines = md_text.splitlines()
-    blocks: List[str] = []
-    paragraph_lines: List[str] = []
-    list_items: List[str] = []
-    in_code = False
-    code_lines: List[str] = []
-    first_h1: Optional[str] = None
-
-    def flush_paragraph() -> None:
-        nonlocal paragraph_lines
-        if paragraph_lines:
-            paragraph = " ".join(x.strip() for x in paragraph_lines if x.strip())
-            if paragraph:
-                blocks.append(f"<p>{convert_inline_markup(paragraph)}</p>")
-            paragraph_lines = []
-
-    def flush_list() -> None:
-        nonlocal list_items
-        if list_items:
-            items_html = "".join(f"<li>{convert_inline_markup(item)}</li>" for item in list_items)
-            blocks.append(f"<ul>{items_html}</ul>")
-            list_items = []
-
-    def flush_code() -> None:
-        nonlocal code_lines
-        if code_lines:
-            code = "\n".join(code_lines)
-            blocks.append(f"<pre><code>{html.escape(code)}</code></pre>")
-            code_lines = []
-
-    for line in lines:
-        stripped = line.strip()
-
-        if stripped.startswith("```"):
-            flush_paragraph()
-            flush_list()
-            if in_code:
-                flush_code()
-                in_code = False
-            else:
-                in_code = True
-            continue
-
-        if in_code:
-            code_lines.append(line)
-            continue
-
-        if not stripped:
-            flush_paragraph()
-            flush_list()
-            continue
-
-        if stripped.startswith("### "):
-            flush_paragraph()
-            flush_list()
-            blocks.append(f"<h3>{convert_inline_markup(stripped[4:].strip())}</h3>")
-            continue
-
-        if stripped.startswith("## "):
-            flush_paragraph()
-            flush_list()
-            blocks.append(f"<h2>{convert_inline_markup(stripped[3:].strip())}</h2>")
-            continue
-
-        if stripped.startswith("# "):
-            flush_paragraph()
-            flush_list()
-            heading = stripped[2:].strip()
-            if first_h1 is None:
-                first_h1 = heading
-            blocks.append(f"<h1>{convert_inline_markup(heading)}</h1>")
-            continue
-
-        if stripped.startswith(">"):
-            flush_paragraph()
-            flush_list()
-            blocks.append(f"<blockquote>{convert_inline_markup(stripped[1:].strip())}</blockquote>")
-            continue
-
-        if stripped in ("---", "***"):
-            flush_paragraph()
-            flush_list()
-            blocks.append("<hr>")
-            continue
-
-        if stripped.startswith(("- ", "* ")):
-            flush_paragraph()
-            list_items.append(stripped[2:].strip())
-            continue
-
-        paragraph_lines.append(line)
-
-    flush_paragraph()
-    flush_list()
-    if in_code:
-        flush_code()
-
-    return "\n".join(blocks), first_h1
-
-
-DIALOG_OPEN_RE = re.compile(r'^"""([A-Za-z]\w*)\s*(--.*--)?\s*$', re.MULTILINE)
-DIALOG_CLOSE_RE = re.compile(r'^"""\s*$', re.MULTILINE)
-
-
-def has_dialog_blocks(text: str) -> bool:
-    return bool(DIALOG_OPEN_RE.search(text) and DIALOG_CLOSE_RE.search(text))
-
-
-def preprocess_dialogs(text: str) -> str:
-    lines = text.splitlines(keepends=True)
-    result = []
-    in_dialog = False
-    current_char = None
-    in_paren = False
-
-    for line in lines:
-        m = DIALOG_OPEN_RE.match(line)
-        if m:
-            current_char = m.group(1)
-            result.append(f'### {current_char}\n')
-            in_dialog = True
-            in_paren = False
-            continue
-
-        if DIALOG_CLOSE_RE.match(line):
-            in_dialog = False
-            current_char = None
-            in_paren = False
-            continue
-
-        if in_dialog and current_char and current_char.lower() == 'ai':
-            s = line.lstrip()
-            if in_paren:
-                if ')' in s:
-                    in_paren = False
-                continue
-            if s.startswith('('):
-                if ')' not in s:
-                    in_paren = True
-                    continue
-                if re.search(r'\)[\.,!?;:]*\s*$', s):
-                    continue
-
-        result.append(line)
-
-    return ''.join(result)
 
 
 def install_archive_to_entries_db(zip_path: Path, db_path: Path) -> None:
@@ -586,12 +420,12 @@ def select_required_downloads(
 
 def is_flush_allowed(cfg) -> bool:
     if not cfg.has_section("updatecms"):
-        return True
+        return False
 
     return cfg.getboolean(
         "updatecms",
         "flush_allowed",
-        fallback=True,
+        fallback=False,
     )
 
 def install_release(entry_dirs: list[Path], cms_dir: Path) -> None:
