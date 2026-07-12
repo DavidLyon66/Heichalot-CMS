@@ -119,3 +119,66 @@ def test_main_rejects_invalid_limit(capsys) -> None:
     rc = lscms.main(['--limit', '0', '--cms-dir', '.'])
     assert rc == 2
     assert '--limit must be >= 1' in capsys.readouterr().err
+
+
+def test_extract_title_uses_story_priority_order(tmp_path: Path) -> None:
+    entry = tmp_path / "entry-0000100"
+    entry.mkdir()
+
+    write_text(entry / "story-free.md", "# Free title\n")
+    write_text(entry / "story-members.md", "# Members title\n")
+    write_text(entry / "story.md", "# Premium title\n")
+
+    assert lscms.extract_title(entry) == "Premium title"
+
+    (entry / "story.md").unlink()
+    assert lscms.extract_title(entry) == "Members title"
+
+    (entry / "story-members.md").unlink()
+    assert lscms.extract_title(entry) == "Free title"
+
+
+def test_extract_type_uses_story_priority_order(tmp_path: Path) -> None:
+    entry = tmp_path / "entry-0000101"
+    entry.mkdir()
+
+    write_text(
+        entry / "story-free.md",
+        "---\ntype: public-story\n---\n# Free\n",
+    )
+    write_text(
+        entry / "story-members.md",
+        "---\ntype: member-story\n---\n# Members\n",
+    )
+    write_text(
+        entry / "story.md",
+        "---\ntype: premium-story\n---\n# Premium\n",
+    )
+
+    type_map = {
+        "premium-story": "P",
+        "member-story": "M",
+        "public-story": "F",
+    }
+
+    assert lscms.extract_type(entry, type_map) == "P"
+
+    (entry / "story.md").unlink()
+    assert lscms.extract_type(entry, type_map) == "M"
+
+    (entry / "story-members.md").unlink()
+    assert lscms.extract_type(entry, type_map) == "F"
+
+
+def test_activity_and_markers_include_all_story_levels(tmp_path: Path) -> None:
+    entry = tmp_path / "entry-0000102"
+    entry.mkdir()
+
+    touch_with_mtime(entry / "story-free.md", "# Free\n", 1_700_000_000)
+    touch_with_mtime(entry / "story-members.md", "# Members\n", 1_700_100_000)
+    touch_with_mtime(entry / "story.md", "# Premium\n", 1_700_050_000)
+
+    info = lscms.build_entry_info(entry, current_entry=None)
+
+    assert info.last_activity_epoch == 1_700_100_000
+    assert info.markers[:3] == ["story", "story-members", "story-free"]

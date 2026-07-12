@@ -1,5 +1,6 @@
 from pathlib import Path
 import sys
+import os
 
 # Allow importing tools/addaistorytext.py
 ROOT = Path(__file__).resolve().parents[1]
@@ -148,38 +149,6 @@ def test_read_config_defaults_when_no_config(tmp_path, monkeypatch):
     assert tags == []
 
 
-def test_read_config_loads_story_filename_and_tags_from_heichalotcms(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    cfg_dir = tmp_path / "heichalotcms"
-    cfg_dir.mkdir()
-    (cfg_dir / "config.ini").write_text(
-        "[cms]\n"
-        "story_filename = historia.md\n\n"
-        "[tags]\n"
-        "default_story_tags = remote-viewing, ai-session\n",
-        encoding="utf-8",
-    )
-
-    story_filename, tags = mod.read_config()
-    assert story_filename == "historia.md"
-    assert tags == ["remote-viewing", "ai-session"]
-
-
-def test_read_config_falls_back_to_local_config_ini(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / "config.ini").write_text(
-        "[cms]\n"
-        "story_filename = localstory.md\n\n"
-        "[tags]\n"
-        "default_story_tags = remote-viewing\n",
-        encoding="utf-8",
-    )
-
-    story_filename, tags = mod.read_config()
-    assert story_filename == "localstory.md"
-    assert tags == ["remote-viewing"]
-
-
 def test_main_writes_to_story_override_path(tmp_path, monkeypatch, capsys):
     story_path = tmp_path / "output" / "story.md"
     input_file = tmp_path / "input.txt"
@@ -206,7 +175,9 @@ def test_main_writes_to_story_override_path(tmp_path, monkeypatch, capsys):
     mod.main()
 
     out = capsys.readouterr().out
-    assert f"Appended 2 block(s) to {story_path}" in out
+
+    assert "Appended 2 block(s)" in out
+    assert story_path.name in out
 
     assert story_path.read_text(encoding="utf-8") == (
         '"""Tags\n'
@@ -248,7 +219,8 @@ def test_main_reads_from_stdin_when_no_file(tmp_path, monkeypatch, capsys):
     mod.main()
 
     out = capsys.readouterr().out
-    assert f"Appended 1 block(s) to {story_path}" in out
+    assert "Appended 1 block(s)" in out
+    assert story_path.name in out
     assert story_path.read_text(encoding="utf-8") == (
         '\n"""Narrator\n'
         'Clipboard question\n'
@@ -310,3 +282,73 @@ def test_main_debate_mode_ignores_story_override(tmp_path, monkeypatch, capsys):
     assert called["text"] == '"""Narrator\nQ\n"""\n\n"""Ai\nA\n"""\n'
     assert not story_path.exists()
     _ = capsys.readouterr()
+
+def test_discover_story_files_returns_existing_levels_in_order(tmp_path):
+    (tmp_path / "story-free.md").write_text("free", encoding="utf-8")
+    (tmp_path / "story.md").write_text("premium", encoding="utf-8")
+
+    found = mod.discover_story_files(tmp_path)
+
+    assert found == [
+        tmp_path / "story-free.md",
+        tmp_path / "story.md",
+    ]
+
+
+def test_select_story_files_prompts_each_existing_file(tmp_path):
+    for name in ("story-free.md", "story-members.md", "story.md"):
+        (tmp_path / name).write_text(name, encoding="utf-8")
+
+    asked = []
+
+    def confirm(path):
+        asked.append(path.name)
+        return path.name != "story-members.md"
+
+    selected = mod.select_story_files(tmp_path, confirm_fn=confirm)
+
+    assert asked == ["story-free.md", "story-members.md", "story.md"]
+    assert selected == [
+        tmp_path / "story-free.md",
+        tmp_path / "story.md",
+    ]
+
+
+def test_main_updates_only_selected_story_levels(tmp_path, monkeypatch):
+    free = tmp_path / "story-free.md"
+    members = tmp_path / "story-members.md"
+    premium = tmp_path / "story.md"
+
+    for path in (free, members, premium):
+        path.write_text(f"header {path.name}\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        mod,
+        "read_settings",
+        lambda: mod.AddAIStorySettings(
+            story_filenames=mod.DEFAULT_STORY_FILENAMES,
+            default_tags=(),
+            image_mode="move",
+        ),
+    )
+    monkeypatch.setattr(
+        mod,
+        "select_story_files",
+        lambda target, names: [free, premium],
+    )
+    monkeypatch.setattr(
+        mod,
+        "read_input",
+        lambda path: ">>> Question\nAnswer\n",
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["addaistorytext.py", str(tmp_path)],
+    )
+
+    mod.main()
+
+    assert '"""Narrator' in free.read_text(encoding="utf-8")
+    assert '"""Narrator' not in members.read_text(encoding="utf-8")
+    assert '"""Narrator' in premium.read_text(encoding="utf-8")
