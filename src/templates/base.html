@@ -1,7 +1,20 @@
 <!doctype html>
-<html lang="{{ user_lang|default('en') }}" dir="{{ 'rtl' if user_lang == 'he' else 'ltr' }}">
+<html
+  lang="{{ user_lang|default('en') }}"
+  dir="{{ 'rtl' if user_lang == 'he' else 'ltr' }}"
+  data-theme="{{ daisy_theme|default('business') }}">
   <head>
   <meta charset="utf-8">
+
+  <script>
+    // Do not let the browser reuse the article-list scroll position
+    // when navigating to a different CMS page.
+    if ("scrollRestoration" in history) {
+      history.scrollRestoration = "manual";
+    }
+    window.scrollTo(0, 0);
+  </script>
+
   <title>{% block title %}Heichalot{% endblock %}</title>
   <style>
 
@@ -123,30 +136,6 @@
       border: 1px solid #2f3540;
       color: #cfcfcf;
       box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
-    }
-
-    body.theme-dark::before {
-      content: "";
-      position: fixed;
-      inset: 0;
-      background:
-        linear-gradient(180deg, #0f1115, #0b0d11),
-        repeating-linear-gradient(
-          0deg,
-          rgba(255,255,255,0.015),
-          rgba(255,255,255,0.015) 1px,
-          transparent 1px,
-          transparent 3px
-        );
-      z-index: -2;
-    }
-
-    body.theme-dark::after {
-      content: "";
-      position: fixed;
-      inset: 0;
-      background: radial-gradient(circle at center, rgba(0,0,0,0.1), rgba(0,0,0,0.6));
-      z-index: -1;
     }
 
     body.theme-dark .page-shell {
@@ -426,42 +415,408 @@
       }
     }
 
+    /* Authentication pages use their own DaisyUI card,
+       rather than the standard CMS article container. */
+    body.auth-page main {
+      max-width: none;
+      margin: 0;
+      padding: 0;
+      border-radius: 0;
+      background: transparent;
+      box-shadow: none;
+    }
+
+    body.theme-dark.auth-page main {
+      background: transparent;
+      box-shadow: none;
+    }
+
+    body.auth-page .page-shell {
+      background: transparent;
+    }
+
+    body.auth-page {
+        position: relative;
+    }
+
+    body.auth-page::before {
+
+        content: "";
+
+        position: fixed;
+        inset: 0;
+
+        background:
+            url("/images/ui/login-background.png")
+            center center / cover no-repeat;
+
+        opacity: 0.12;
+
+        filter:
+            grayscale(100%)
+            contrast(0.9)
+            brightness(0.65);
+
+        pointer-events: none;
+        z-index: -1;
+    }
+
+.btn-primary {
+
+    background: #1f6feb !important;
+    border-color: #1f6feb !important;
+    color: white !important;
+
+}
+
+.btn-primary:hover {
+
+    background: #2b7fff !important;
+    border-color: #2b7fff !important;
+
+}
+
+  
+    /* ---------------------------------------------------------
+       Desktop application layout
+       --------------------------------------------------------- */
+
+    .app-navbar {
+      position: relative;
+      z-index: 100;
+      min-height: 64px;
+      border-bottom: 1px solid var(--color-base-300);
+    }
+
+    .app-navbar-title {
+      white-space: nowrap;
+    }
+
+    .app-layout {
+      display: grid;
+      grid-template-columns: 250px minmax(0, 1fr);
+      min-height: calc(100vh - 64px);
+    }
+
+    .app-sidebar {
+      position: sticky;
+      top: 0;
+      align-self: start;
+      height: 100vh;
+      overflow-y: auto;
+      padding: 18px 12px;
+      background: var(--color-base-200);
+      border-right: 1px solid var(--color-base-300);
+    }
+
+    .app-sidebar .menu-title {
+      margin-top: 10px;
+      opacity: 0.6;
+      font-size: 0.72rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .app-sidebar .menu li > a {
+      min-height: 40px;
+    }
+
+    .app-content img,
+    .app-content video,
+    .app-content iframe,
+    .app-content .page {
+      max-width: 100%;
+      box-sizing: border-box;
+    }
+
+    .app-content main {
+      width: min(100%, 1100px);
+      max-width: 1100px;
+      margin: 24px auto 0;
+    }
+
+    .flash-messages {
+      width: min(100%, 1100px);
+      margin: 18px auto 0;
+    }
+
+    /* Authentication pages keep their focused, centred layout. */
+    body.auth-page .app-layout {
+      display: block;
+      min-height: calc(100vh - 64px);
+    }
+
+    body.auth-page .app-sidebar {
+      display: none;
+    }
+
+    body.auth-page .app-content {
+      padding: 0;
+    }
+
+    body.auth-page .app-content main {
+      width: 100%;
+      max-width: none;
+      margin: 0;
+    }
+
+    @media (max-width: 900px) {
+      .app-layout {
+        grid-template-columns: 210px minmax(0, 1fr);
+      }
+
+      .app-content {
+        padding-left: 16px;
+        padding-right: 16px;
+      }
+    }
+
+  
+    html {
+      scroll-behavior: auto;
+      overflow-anchor: none;
+    }
+
+    body,
+    .app-content,
+    .app-content main,
+    .entry-content {
+      overflow-anchor: none;
+    }
+
   </style>
   <script src="https://unpkg.com/htmx.org@1.9.12"></script>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+
+  <link
+    href="https://cdn.jsdelivr.net/npm/daisyui@5"
+    rel="stylesheet"
+    type="text/css" />
+
+  <link
+    href="https://cdn.jsdelivr.net/npm/daisyui@5/themes.css"
+    rel="stylesheet"
+    type="text/css" />
+
 </head>
-<body class="theme-{{ theme|default('dark') }}" data-bs-theme="dark">
-  <div class="page-shell">
-    <nav>
-      <a href="{{ url_for('index') }}">Home</a>
-      <form action="{{ url_for('search') }}" method="get" class="nav-search">
-        <input name="q" placeholder="Search..." />
-      </form>
+<body class="theme-{{ theme|default('dark') }} {% block body_class %}{% endblock %}">
+
+  <header class="navbar app-navbar bg-base-200 text-base-content px-4 shadow-sm">
+
+    <div class="navbar-start">
+      <a href="{{ url_for('index') }}"
+         class="btn btn-ghost app-navbar-title text-xl">
+        Heichalot CMS
+      </a>
+    </div>
+
+    <div class="navbar-center">
+      {% block navbar_center %}{% endblock %}
+    </div>
+
+    <div class="navbar-end gap-2">
+
       {% if current_user %}
-        | <a href="{{ url_for('account') }}">Account</a>
-        | <a href="{{ url_for('logout') }}">Logout</a>
-        | {{ current_user.email }} ({{ current_user.access_level }}) 
+
+        <div class="dropdown dropdown-end">
+
+          <div tabindex="0"
+               role="button"
+               class="btn btn-ghost">
+            {{ current_user.email }}
+          </div>
+
+          <ul tabindex="0"
+              class="menu menu-sm dropdown-content
+                     bg-base-200 rounded-box z-[110]
+                     mt-3 w-64 p-2 shadow-xl
+                     border border-base-300">
+
+            <li class="menu-title">
+              <span>{{ current_user.access_level|title }} account</span>
+            </li>
+
+            <li>
+              <a href="{{ url_for('account') }}">
+                Account settings
+              </a>
+            </li>
+
+            <li>
+              <a href="{{ url_for('logout') }}">
+                Logout
+              </a>
+            </li>
+
+          </ul>
+
+        </div>
+
       {% else %}
-        | <a href="{{ url_for('login') }}">Login</a>
-        | <a href="{{ url_for('register') }}">Register</a>
-      {% endif %}
-    </nav>
 
-    {% with messages = get_flashed_messages() %}
-      {% if messages %}
-        <ul>
-        {% for message in messages %}
-          <li>{{ message }}</li>
-        {% endfor %}
-        </ul>
-      {% endif %}
-    {% endwith %}
+        <a href="{{ url_for('login') }}"
+           class="btn btn-ghost">
+          Login
+        </a>
 
-    <main>
-    {% block content %}{% endblock %}
-    </main>
+        <a href="{{ url_for('register') }}"
+           class="btn btn-primary">
+          Register
+        </a>
+
+      {% endif %}
+
+    </div>
+
+  </header>
+
+  <div class="app-layout">
+
+    <aside class="app-sidebar">
+
+      <ul class="menu w-full">
+
+        <li class="menu-title">
+          <span>Timeline</span>
+        </li>
+
+        <li>
+          <a href="#">
+            Past
+          </a>
+        </li>
+
+        <li>
+          <a href="#">
+            Present
+          </a>
+        </li>
+
+        <li>
+          <a href="#">
+            Future
+          </a>
+        </li>
+
+        <li class="menu-title">
+          <span>Explore</span>
+        </li>
+
+        <li>
+          <a href="#">
+            Locations
+          </a>
+        </li>
+
+        <li>
+          <a href="#">
+            Topics
+          </a>
+        </li>
+
+        <li>
+          <a href="#">
+            Streams
+          </a>
+        </li>
+
+        <li class="menu-title">
+          <span>Saved locations</span>
+        </li>
+
+        <li>
+          <a href="#">
+            Jewish Quarter
+          </a>
+        </li>
+
+        <li>
+          <a href="#">
+            Jerusalem
+          </a>
+        </li>
+
+        <li>
+          <a href="#">
+            Tokyo
+          </a>
+        </li>
+
+      </ul>
+
+    </aside>
+
+    <div class="app-content">
+
+      {% with messages = get_flashed_messages() %}
+        {% if messages %}
+          <div class="flash-messages">
+            {% for message in messages %}
+              <div class="alert alert-info mb-2">
+                <span>{{ message }}</span>
+              </div>
+            {% endfor %}
+          </div>
+        {% endif %}
+      {% endwith %}
+
+      <main>
+        {% block content %}{% endblock %}
+      </main>
+
+    </div>
+
   </div>
- <div id="modals-here"></div>
+
+  <div
+    id="toast-area"
+    class="toast toast-top toast-end z-[200]">
+  </div>
+
+  <div id="modals-here"></div>
+
+  <script>
+	  
+	function showToast(message) {
+
+		let area = document.getElementById("toast-area");
+
+		// Create it automatically if it doesn't exist.
+		if (!area) {
+
+			area = document.createElement("div");
+			area.id = "toast-area";
+			area.className = "toast toast-top toast-end z-[200]";
+
+			document.body.appendChild(area);
+		}
+
+		const toast = document.createElement("div");
+		toast.className = "alert alert-success shadow-lg";
+
+		const span = document.createElement("span");
+		span.textContent = message;
+
+		toast.appendChild(span);
+		area.appendChild(toast);
+
+		setTimeout(() => {
+			toast.remove();
+		}, 2500);
+	}
+	  
+    function resetCmsPageScroll() {
+      if (!window.location.hash) {
+        window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+      }
+    }
+
+    resetCmsPageScroll();
+    document.addEventListener("DOMContentLoaded", resetCmsPageScroll);
+    window.addEventListener("load", resetCmsPageScroll);
+    window.addEventListener("pageshow", resetCmsPageScroll);
+    requestAnimationFrame(resetCmsPageScroll);
+  </script>
+
 </body>
 </html>

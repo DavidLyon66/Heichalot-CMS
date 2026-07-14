@@ -1,10 +1,150 @@
 {% extends "base.html" %}
 {% block title %}Login{% endblock %}
+{% block body_class %}auth-page{% endblock %}
 {% block content %}
-<h1>Login</h1>
-<form method="post">
-  <p><label>Email<br><input type="email" name="email" value="{{ email or '' }}" required></label></p>
-  <p><label>Password<br><input type="password" name="password" required></label></p>
-  <p><button type="submit">Login</button></p>
-</form>
+
+<div class="flex min-h-[64vh] items-center justify-center px-4 py-10">
+
+  <div class="w-full max-w-md">
+
+    <div
+<div
+<div
+  class="card overflow-hidden border border-base-300
+         bg-neutral text-neutral-content shadow-2xl">
+<img
+  src="/images/ui/login-banner.png"
+  alt="Heichalot timeline"
+  class="w-full">
+
+      <div class="h-1.5 bg-primary"></div>
+
+      <div class="card-body px-8 py-9 sm:px-10">
+
+        <div class="mb-7 text-center">
+
+          <h1 class="text-3xl font-bold tracking-tight">
+            Welcome back
+          </h1>
+
+          <p class="mt-2 text-sm text-base-content/65">
+            Log in to continue to Heichalot CMS
+          </p>
+
+        </div>
+
+        <form method="post" class="space-y-5">
+
+          <fieldset class="fieldset">
+
+            <label class="label font-medium" for="email">
+              Email address
+            </label>
+
+            <label
+              class="input input-bordered flex w-full
+                     items-center gap-3 bg-base-200/50">
+
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                class="h-4 w-4 opacity-55"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor">
+
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M3 8l9 6 9-6M5 19h14a2 2 0 002-2V7
+                     a2 2 0 00-2-2H5a2 2 0 00-2 2v10
+                     a2 2 0 002 2z" />
+
+              </svg>
+
+              <input
+                id="email"
+                type="email"
+                name="email"
+                value="{{ email or '' }}"
+                placeholder="you@example.com"
+                autocomplete="email"
+                class="grow"
+                required>
+
+            </label>
+
+          </fieldset>
+
+          <fieldset class="fieldset">
+
+            <div class="flex items-center justify-between">
+
+              <label class="label font-medium" for="password">
+                Password
+              </label>
+
+              <span class="text-xs text-base-content/45">
+                Secure account access
+              </span>
+
+            </div>
+
+            <label
+              class="input input-bordered flex w-full
+                     items-center gap-3 bg-base-200/50">
+
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                class="h-4 w-4 opacity-55"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor">
+
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M12 11c1.105 0 2 .895 2 2s-.895 2-2 2
+                     -2-.895-2-2 .895-2 2-2zm0 0V8m-6 3V8
+                     a6 6 0 1112 0v3m1 0H5a2 2 0 00-2 2v6
+                     a2 2 0 002 2h14a2 2 0 002-2v-6
+                     a2 2 0 00-2-2z" />
+
+              </svg>
+              <input
+                id="password"
+                type="password"
+                name="password"
+                placeholder="Enter your password"
+                autocomplete="current-password"
+                class="grow"
+                required>
+
+            </label>
+          </fieldset>
+          <button
+            type="submit"
+            class="btn btn-primary mt-2 w-full shadow-lg">
+
+            Log in
+
+          </button>
+        </form>
+        <div class="divider my-7 text-xs text-base-content/40">
+          NEW TO HEICHALOT.TECH ?
+        </div>
+        <a
+          href="{{ url_for('register') }}"
+          class="btn btn-outline w-full">
+          Create an account
+        </a>
+      </div>
+    </div>
+    <p class="mt-5 text-center text-xs text-base-content/45">
+      Access is controlled according to your membership level.
+    </p>
+  </div>
+</div>
+
 {% endblock %}

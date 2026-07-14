@@ -1,37 +1,372 @@
 {% extends "base.html" %}
 {% block title %}{{ entry.title }}{% endblock %}
+
 {% block content %}
-  <button class="toolbar-button"
-          hx-get="/cms/modal/downloadpdf/{{ entry.entry_id }}"
-          hx-target="#modals-here"
-          hx-trigger="click">
-    PDF
+
+<div class="entry-toolbar flex gap-2 mb-3">
+
+  <a href="{{ url_for('index') }}"
+     class="btn btn-sm btn-ghost text-primary hover:text-primary">
+    ← Back
+  </a>
+
+  <button class="btn btn-sm btn-outline text-primary hover:text-primary"
+          onclick="shareEntry()">
+    Share
   </button>
 
   {% if user_level in ["free", "", none] %}
-    <button class="toolbar-button"
-            hx-get="/cms/modal/fullstory/{{ entry.entry_id }}"
-            hx-target="#modals-here"
-            hx-trigger="click">
-      Full Story
-    </button>
+  <button class="btn btn-sm btn-outline"
+          hx-get="/cms/modal/fullstory/{{ entry.entry_id }}"
+          hx-target="#entry-modal-content"
+          hx-swap="innerHTML"
+          hx-on::after-request="
+            if (event.detail.successful) {
+              document.getElementById('entry-modal').showModal();
+            }
+          ">
+    Full Story
+  </button>
   {% else %}
-    <a class="toolbar-button" href="/entry/{{ entry.entry_id }}?view=full">
-      Full Story
-    </a>
+  <a class="btn btn-sm btn-outline"
+     href="/entry/{{ entry.entry_id }}?view=full">
+    Full Story
+  </a>
   {% endif %}
 
-<p><small>Entry: {{ entry.entry_id }} | Stream: {{ entry.stream_name or 'none' }} | Your level: {{ user_level }} | Entry access: {{ required_level }}</small></p>
-<div class="entry-content">
-  {{ rendered_html | safe }}
 </div>
-{% if related %}
-  <h2>Related entries</h2>
-  <ul>
-    {% for r in related %}
-      <li><a href="{{ url_for('entry', entry_id=r.entry_id) }}">{{ r.title }}</a></li>
-    {% endfor %}
-  </ul>
-{% endif %}
-{% endblock %}
 
+<div
+  id="entry-details"
+  tabindex="0"
+  class="collapse collapse-arrow
+         bg-base-100 border border-base-300
+         mb-4 hidden">
+
+  <div
+    id="entry-details-summary"
+    class="collapse-title text-sm font-normal
+           leading-relaxed
+           after:start-5 after:end-auto
+           pe-4 ps-12">
+    Entry details
+  </div>
+
+  <div
+    id="entry-details-content"
+    class="collapse-content text-sm">
+  </div>
+
+</div>
+
+<dialog id="entry-modal"
+        class="modal modal-bottom sm:modal-middle">
+
+  <div class="modal-box max-w-4xl">
+
+    <div id="entry-modal-content">
+      <span class="loading loading-spinner loading-md"></span>
+    </div>
+
+    <div class="modal-action">
+      <form method="dialog">
+        <button class="btn">
+          Close
+        </button>
+      </form>
+    </div>
+
+  </div>
+
+  <form method="dialog" class="modal-backdrop">
+    <button>close</button>
+  </form>
+
+</dialog>
+
+<div class="entry-document-shell">
+  <iframe
+    id="entry-document"
+    class="entry-document-frame"
+    title="{{ entry.title }}"
+    srcdoc="{{ rendered_html | e }}"
+    loading="eager"
+    scrolling="no"
+    onload="resizeEntryDocument(this)">
+  </iframe>
+</div>
+
+{% if related %}
+  <section class="related-entries">
+    <h2>Related entries</h2>
+    <ul>
+      {% for r in related %}
+        <li>
+          <a href="{{ url_for('entry', entry_id=r.entry_id) }}">
+            {{ r.title }}
+          </a>
+        </li>
+      {% endfor %}
+    </ul>
+  </section>
+{% endif %}
+
+<style>
+  .entry-toolbar {
+    display: flex;
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
+  }
+
+  .entry-document-shell {
+    width: 100%;
+    overflow: hidden;
+    border-radius: 0;
+  }
+
+  .entry-document-frame {
+    display: block;
+    width: 100%;
+    min-height: 70vh;
+    border: 0;
+    background: transparent;
+  }
+
+  .related-entries {
+    margin-top: 2rem;
+  }
+</style>
+
+<script>
+
+  async function shareEntry() {
+
+      const url =
+          "https://heichalot.tech/cms/entry/{{ entry.entry_id }}";
+
+      if (navigator.share) {
+          await navigator.share({
+              title: "{{ entry.title|e }}",
+              text: "{{ entry.title|e }}",
+              url: url
+          });
+          return;
+      }
+
+      navigator.clipboard.writeText(url)
+          .then(() => {
+              showToast("✓ Link copied to clipboard");
+          })
+  }
+
+  function resizeEntryDocument(frame) {
+    try {
+      const doc = frame.contentDocument || frame.contentWindow.document;
+
+      /*
+       * Move the large story metadata block out of the article iframe
+       * and into the compact DaisyUI Details collapse above it.
+       */
+      const storyMeta = doc.querySelector(".story-meta");
+      const detailsBox = document.getElementById("entry-details");
+      const detailsSummary = document.getElementById("entry-details-summary");
+      const detailsContent = document.getElementById("entry-details-content");
+
+      if (
+        storyMeta &&
+        detailsBox &&
+        detailsSummary &&
+        detailsContent &&
+        !detailsBox.dataset.loaded
+      ) {
+        const lines = Array.from(
+          storyMeta.querySelectorAll(".story-meta-line")
+        );
+
+        const summaryLines = [
+          "Entry: {{ entry.entry_id }} | " +
+          "Stream: {{ entry.stream_name or 'none' }} | " +
+          "Your level: {{ user_level }} | " +
+          "Entry access: {{ required_level }}"
+        ];
+
+        if (lines[1]) summaryLines.push(lines[1].textContent.trim());
+        if (lines[2]) summaryLines.push(lines[2].textContent.trim());
+        if (lines[3]) summaryLines.push(lines[3].textContent.trim());
+
+        const remainingLines = lines.slice(4);
+
+        detailsSummary.innerHTML = "";
+
+        summaryLines.forEach(function (lineText) {
+          const summaryLine = document.createElement("div");
+          summaryLine.textContent = lineText;
+          detailsSummary.appendChild(summaryLine);
+        });
+
+        detailsContent.innerHTML = "";
+
+        const metadataPanel = document.createElement("div");
+        metadataPanel.className =
+          "rounded-box bg-base-200 border border-base-300 p-4 mt-2 font-mono text-xs leading-relaxed";
+
+        remainingLines.forEach(function (line) {
+          const metadataLine = document.createElement("div");
+          metadataLine.textContent = line.textContent.trim();
+          metadataPanel.appendChild(metadataLine);
+        });
+
+        detailsContent.appendChild(metadataPanel);
+
+        detailsBox.classList.remove("hidden");
+        detailsBox.dataset.loaded = "true";
+
+        /*
+         * Remove the original large metadata panel from the article.
+         */
+        storyMeta.remove();
+      }
+      const outerTheme = getComputedStyle(document.documentElement);
+      const base100 = outerTheme.getPropertyValue("--color-base-100").trim() || "#111111";
+      const base200 = outerTheme.getPropertyValue("--color-base-200").trim() || "#181818";
+      const base300 = outerTheme.getPropertyValue("--color-base-300").trim() || "#262626";
+      const baseContent = outerTheme.getPropertyValue("--color-base-content").trim() || "#e5e5e5";
+      const primary = outerTheme.getPropertyValue("--color-primary").trim() || "#1f6feb";
+      const headingGold = "#d4a72c";      
+
+      let themeStyle = doc.getElementById("heichalot-entry-theme");
+      if (!themeStyle) {
+        themeStyle = doc.createElement("style");
+        themeStyle.id = "heichalot-entry-theme";
+        doc.head.appendChild(themeStyle);
+      }
+
+      themeStyle.textContent = `
+        :root {
+          --bg: ${base100} !important;
+          --paper: ${base200} !important;
+          --text: ${baseContent} !important;
+          --muted: #a3a3a3 !important;
+          --line: ${base300} !important;
+          --link: ${primary} !important;
+          --link-hover: ${primary} !important;
+          --heading: ${primary} !important;
+          --shadow: rgba(0,0,0,.35) !important;
+          --card: ${base200} !important;
+          --meta-bg: ${base100} !important;
+          --meta-border: ${base300} !important;
+          --meta-text: #c7c7c7 !important;
+        }
+
+        html,
+        body {
+          background: transparent !important;
+          color: ${baseContent} !important;
+        }
+
+        body {
+          max-width: none !important;
+          margin: 0 !important;
+          padding: 0 !important;
+        }
+
+        .page {
+          width: 100% !important;
+          margin: 0 !important;
+          background: ${base200} !important;
+          border-color: ${base300} !important;
+          color: ${baseContent} !important;
+          box-shadow: none !important;
+        }
+
+        .story-meta, .story-list li, pre, blockquote {
+          background: ${base100} !important;
+          border-color: ${base300} !important;
+          color: ${baseContent} !important;
+        }
+
+        .page p,
+        .page li {
+          color: ${baseContent} !important;
+        }
+
+        .page h1,
+        .page h2,
+        .page h3 {
+            color: ${headingGold} !important;
+        }
+
+        .page a {
+          color: ${primary} !important;
+        }
+
+        img {
+          background: ${base100} !important;
+          border-color: ${base300} !important;
+        }
+      `;
+
+      /*
+       * rendered_html contains a legacy relative link such as index.html.
+       * Inside srcdoc that resolves beneath /entry/, so replace it with the
+       * real Flask index URL. url_for() automatically works locally at /
+       * and under the hosted /cms prefix.
+       */
+      const indexUrl = {{ url_for('index') | tojson }};
+      const links = doc.querySelectorAll("a[href]");
+
+      links.forEach(function (link) {
+
+        const backLink = doc.querySelector('a[href="index.html"], a[href="./index.html"]');
+        if (backLink) {
+            const p = backLink.closest("p");
+            if (p) p.remove();
+        }
+
+        const rawHref = link.getAttribute("href") || "";
+        const linkText = (link.textContent || "").trim().toLowerCase();
+
+        if (
+          rawHref === "index.html" ||
+          rawHref === "./index.html" ||
+          rawHref.endsWith("/index.html") ||
+          linkText === "← back" ||
+          linkText === "back"
+        ) {
+          link.setAttribute("href", indexUrl);
+          link.setAttribute("target", "_top");
+        }
+      });
+
+      const height = Math.max(
+        doc.documentElement.scrollHeight,
+        doc.body ? doc.body.scrollHeight : 0
+      );
+
+      if (height > 0) {
+        frame.style.height = height + "px";
+      }
+
+      if (doc.documentElement) {
+        doc.documentElement.style.overflow = "hidden";
+      }
+
+      if (doc.body) {
+        doc.body.style.overflow = "hidden";
+      }
+    } catch (error) {
+      console.warn("Unable to prepare entry document:", error);
+      frame.style.height = "80vh";
+      frame.setAttribute("scrolling", "auto");
+    }
+  }
+
+  window.addEventListener("resize", function () {
+    const frame = document.getElementById("entry-document");
+    if (frame) {
+      resizeEntryDocument(frame);
+    }
+  });
+</script>
+
+{% endblock %}

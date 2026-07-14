@@ -1,20 +1,186 @@
 {% extends "base.html" %}
 {% block title %}Register{% endblock %}
+{% block body_class %}auth-page{% endblock %}
 {% block content %}
-<h1>Register</h1>
-<form method="post">
-  <p><label>Email<br><input type="email" name="email" value="{{ email or '' }}" required></label></p>
-  <p><label>Password<br><input type="password" name="password" required></label></p>
-  <p>
-    <label>Account type<br>
-      <select name="access_level">
-        <option value="free" {% if access_level == 'free' %}selected{% endif %}>free</option>
-        <option value="members" {% if access_level == 'members' %}selected{% endif %}>members</option>
-        <option value="premium" {% if access_level == 'premium' %}selected{% endif %}>premium</option>
-      </select>
-    </label>
-  </p>
-  <p><button type="submit">Register</button></p>
-</form>
-<p><small>Premium currently redirects to a placeholder Stripe/payment page.</small></p>
+
+<div class="flex min-h-[68vh] items-center justify-center px-4 py-10">
+
+  <div class="w-full max-w-md">
+
+    <div
+      class="card overflow-hidden border border-base-300
+             bg-neutral text-neutral-content shadow-2xl">
+
+      <img
+        src="/images/ui/login-banner.png"
+        alt="Heichalot timeline"
+        class="w-full">
+
+      <div class="h-1.5 bg-primary"></div>
+
+      <div class="card-body px-8 py-9 sm:px-10">
+
+        <div class="mb-7 text-center">
+
+          <h1 class="text-3xl font-bold tracking-tight">
+            Create your account
+          </h1>
+
+          <p class="mt-2 text-sm text-base-content/65">
+            Join Heichalot CMS and select your access level
+          </p>
+        </div>
+        <form method="post" class="space-y-5">
+          <fieldset class="fieldset">
+            <label class="label font-medium" for="email">
+              Email address
+            </label>
+            <label
+              class="input input-bordered flex w-full
+                     items-center gap-3 bg-base-200/50">
+
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                class="h-4 w-4 opacity-55"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor">
+
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M3 8l9 6 9-6M5 19h14a2 2 0 002-2V7
+                     a2 2 0 00-2-2H5a2 2 0 00-2 2v10
+                     a2 2 0 002 2z" />
+
+              </svg>
+
+              <input
+                id="email"
+                type="email"
+                name="email"
+                value="{{ email or '' }}"
+                placeholder="you@example.com"
+                autocomplete="email"
+                class="grow"
+                required>
+
+            </label>
+
+          </fieldset>
+
+          <fieldset class="fieldset">
+
+            <div class="flex items-center justify-between">
+
+              <label class="label font-medium" for="password">
+                Password
+              </label>
+
+              <span class="text-xs text-base-content/45">
+                Choose a secure password
+              </span>
+
+            </div>
+
+            <label
+              class="input input-bordered flex w-full
+                     items-center gap-3 bg-base-200/50">
+
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                class="h-4 w-4 opacity-55"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor">
+
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M12 11c1.105 0 2 .895 2 2s-.895 2-2 2
+                     -2-.895-2-2 .895-2 2-2zm0 0V8m-6 3V8
+                     a6 6 0 1112 0v3m1 0H5a2 2 0 00-2 2v6
+                     a2 2 0 002 2h14a2 2 0 002-2v-6
+                     a2 2 0 00-2-2z" />
+
+              </svg>
+
+              <input
+                id="password"
+                type="password"
+                name="password"
+                placeholder="Choose a password"
+                autocomplete="new-password"
+                class="grow"
+                required>
+
+            </label>
+
+          </fieldset>
+
+          <fieldset class="fieldset">
+
+            <label class="label font-medium" for="access_level">
+              Account type
+            </label>
+
+            <select
+              id="access_level"
+              name="access_level"
+              class="select select-bordered w-full bg-base-200/50">
+
+              <option
+                value="free"
+                {% if access_level == "free" %}selected{% endif %}>
+                Free access
+              </option>
+
+              <option
+                value="premium"
+                {% if access_level == "premium" %}selected{% endif %}>
+                Premium access
+              </option>
+
+            </select>
+
+            <p class="mt-2 text-xs leading-relaxed text-base-content/55">
+              Premium registration continues to the payment page.
+              New accounts remain inactive until approved.
+            </p>
+
+          </fieldset>
+
+          <button
+            type="submit"
+            class="btn btn-primary mt-2 w-full shadow-lg">
+
+            Create account
+
+          </button>
+
+        </form>
+
+        <div class="divider my-7 text-xs text-base-content/40">
+          ALREADY REGISTERED?
+        </div>
+
+        <a
+          href="{{ url_for('login') }}"
+          class="btn btn-outline w-full">
+
+          Return to login
+        </a>
+
+      </div>
+    </div>
+
+    <p class="mt-5 text-center text-xs text-base-content/45">
+      Access is controlled according to your membership level.
+    </p>
+
+  </div>
+</div>
+
 {% endblock %}
