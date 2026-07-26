@@ -15,7 +15,7 @@
     window.scrollTo(0, 0);
   </script>
 
-  <title>{% block title %}Heichalot{% endblock %}</title>
+  <title>{% block title %}Heichalot CMS{% endblock %}</title>
   <style>
 
     h1 {
@@ -584,6 +584,259 @@
       overflow-anchor: none;
     }
 
+
+    /* ---------------------------------------------------------
+       Remote-view workstation layout
+       The existing CMS sidebar remains the first column.
+       Remote-view pages split the application content into:
+       centre visual/report stage + right conversation workspace.
+       --------------------------------------------------------- */
+
+    body.remote-view-page {
+      overflow: hidden;
+    }
+
+    body.remote-view-page .app-content {
+      min-width: 0;
+      height: calc(100vh - 64px);
+      overflow: hidden;
+      padding: 0;
+    }
+
+    body.remote-view-page .app-content main {
+      width: 100%;
+      max-width: none;
+      height: 100%;
+      margin: 0;
+      padding: 0;
+      border-radius: 0;
+      background: var(--color-base-100);
+      box-shadow: none;
+      overflow: hidden;
+    }
+
+    body.theme-dark.remote-view-page .app-content main {
+      background: var(--color-base-100);
+      border-radius: 0;
+      box-shadow: none;
+    }
+
+    body.remote-view-page .flash-messages {
+      position: fixed;
+      top: 76px;
+      left: 50%;
+      z-index: 180;
+      width: min(680px, calc(100vw - 32px));
+      margin: 0;
+      transform: translateX(-50%);
+    }
+
+    .remote-view-layout {
+      display: grid;
+      grid-template-columns: minmax(480px, 1fr) minmax(340px, 420px);
+      width: 100%;
+      height: 100%;
+      min-height: 0;
+      background: var(--color-base-100);
+    }
+
+    .remote-view-centre {
+      min-width: 0;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      padding: 20px;
+      overflow: hidden;
+      border-right: 1px solid var(--color-base-300);
+    }
+
+    .remote-view-heading {
+      flex: 0 0 auto;
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 14px;
+    }
+
+    .remote-view-stage {
+      position: relative;
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow: hidden;
+      border: 1px solid var(--color-base-300);
+      border-radius: var(--radius-box);
+      background:
+        radial-gradient(circle at 50% 45%,
+          color-mix(in oklab, var(--color-base-300) 55%, transparent),
+          transparent 62%),
+        var(--color-base-200);
+    }
+
+    .remote-view-stage-canvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    .remote-view-report {
+      position: relative;
+      z-index: 2;
+      width: min(760px, calc(100% - 40px));
+      max-height: calc(100% - 40px);
+      margin: 20px auto;
+      padding: 24px;
+      overflow-y: auto;
+      border: 1px solid color-mix(in oklab, var(--color-base-content) 18%, transparent);
+      border-radius: var(--radius-box);
+      background: color-mix(in oklab, var(--color-base-100) 88%, transparent);
+      backdrop-filter: blur(8px);
+      box-shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
+    }
+
+    .remote-view-stage-placeholder {
+      position: absolute;
+      inset: 0;
+      z-index: 1;
+      display: grid;
+      place-items: center;
+      padding: 32px;
+      text-align: center;
+    }
+
+    .remote-view-workspace {
+      min-width: 0;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      background: var(--color-base-200);
+    }
+
+    .remote-view-workspace-header {
+      flex: 0 0 auto;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--color-base-300);
+    }
+
+    .remote-view-conversation {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow-y: auto;
+      padding: 16px;
+      scroll-behavior: smooth;
+      overscroll-behavior: contain;
+    }
+
+    .remote-view-conversation .chat {
+      margin-bottom: 16px;
+    }
+
+    .remote-view-conversation .chat-start .chat-bubble {
+      max-width: 94%;
+    }
+
+    .remote-view-conversation .chat-end .chat-bubble {
+      max-width: 82%;
+    }
+
+    .remote-view-composer {
+      flex: 0 0 auto;
+      padding: 14px 16px;
+      border-top: 1px solid var(--color-base-300);
+      background: var(--color-base-100);
+    }
+
+    .remote-view-processing {
+      position: absolute;
+      inset: 0;
+      z-index: 3;
+      display: none;
+      place-items: center;
+      pointer-events: none;
+      background: rgba(0, 0, 0, 0.10);
+    }
+
+    .remote-view-stage.is-processing .remote-view-processing {
+      display: grid;
+    }
+
+    .remote-view-stage.is-processing .remote-view-report {
+      opacity: 0.18;
+      pointer-events: none;
+    }
+
+    @media (max-width: 1150px) {
+      .remote-view-layout {
+        grid-template-columns: minmax(0, 1fr) 350px;
+      }
+    }
+
+    @media (max-width: 900px) {
+      body.remote-view-page {
+        overflow: auto;
+      }
+
+      body.remote-view-page .app-content {
+        height: auto;
+        min-height: calc(100vh - 64px);
+        overflow: visible;
+        padding: 0;
+      }
+
+      body.remote-view-page .app-content main {
+        height: auto;
+        overflow: visible;
+      }
+
+      .remote-view-layout {
+        display: block;
+        height: auto;
+      }
+
+      .remote-view-centre {
+        min-height: 560px;
+        overflow: visible;
+        border-right: 0;
+        border-bottom: 1px solid var(--color-base-300);
+      }
+
+      .remote-view-stage {
+        min-height: 480px;
+      }
+
+      .remote-view-workspace {
+        min-height: 620px;
+      }
+
+      .remote-view-conversation {
+        max-height: 60vh;
+      }
+    }
+
+    @media (max-width: 700px) {
+      .remote-view-centre {
+        min-height: 500px;
+        padding: 12px;
+      }
+
+      .remote-view-stage {
+        min-height: 410px;
+      }
+
+      .remote-view-report {
+        width: calc(100% - 20px);
+        max-height: calc(100% - 20px);
+        margin: 10px auto;
+        padding: 18px;
+      }
+
+      .remote-view-workspace {
+        min-height: 560px;
+      }
+    }
+
   </style>
   <script src="https://unpkg.com/htmx.org@1.9.12"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
@@ -597,6 +850,8 @@
     href="https://cdn.jsdelivr.net/npm/daisyui@5/themes.css"
     rel="stylesheet"
     type="text/css" />
+
+  {% block head_extra %}{% endblock %}
 
 </head>
 <body class="theme-{{ theme|default('dark') }} {% block body_class %}{% endblock %}">
@@ -616,53 +871,57 @@
 
     <div class="navbar-end gap-2">
 
-      {% if current_user %}
+      {% if auth_ui_enabled|default(false) %}
 
-        <div class="dropdown dropdown-end">
+        {% if current_user %}
 
-          <div tabindex="0"
-               role="button"
-               class="btn btn-ghost">
-            {{ current_user.email }}
+          <div class="dropdown dropdown-end">
+
+            <div tabindex="0"
+                 role="button"
+                 class="btn btn-ghost">
+              {{ current_user.email }}
+            </div>
+
+            <ul tabindex="0"
+                class="menu menu-sm dropdown-content
+                       bg-base-200 rounded-box z-[110]
+                       mt-3 w-64 p-2 shadow-xl
+                       border border-base-300">
+
+              <li class="menu-title">
+                <span>{{ current_user.access_level|title }} account</span>
+              </li>
+
+              <li>
+                <a href="{{ url_for('account') }}">
+                  Account settings
+                </a>
+              </li>
+
+              <li>
+                <a href="{{ url_for('logout') }}">
+                  Logout
+                </a>
+              </li>
+
+            </ul>
+
           </div>
 
-          <ul tabindex="0"
-              class="menu menu-sm dropdown-content
-                     bg-base-200 rounded-box z-[110]
-                     mt-3 w-64 p-2 shadow-xl
-                     border border-base-300">
+        {% else %}
 
-            <li class="menu-title">
-              <span>{{ current_user.access_level|title }} account</span>
-            </li>
+          <a href="{{ url_for('login') }}"
+             class="btn btn-ghost">
+            Login
+          </a>
 
-            <li>
-              <a href="{{ url_for('account') }}">
-                Account settings
-              </a>
-            </li>
+          <a href="{{ url_for('register') }}"
+             class="btn btn-primary">
+            Register
+          </a>
 
-            <li>
-              <a href="{{ url_for('logout') }}">
-                Logout
-              </a>
-            </li>
-
-          </ul>
-
-        </div>
-
-      {% else %}
-
-        <a href="{{ url_for('login') }}"
-           class="btn btn-ghost">
-          Login
-        </a>
-
-        <a href="{{ url_for('register') }}"
-           class="btn btn-primary">
-          Register
-        </a>
+        {% endif %}
 
       {% endif %}
 
@@ -672,79 +931,473 @@
 
   <div class="app-layout">
 
-    <aside class="app-sidebar">
+  {% set active_collection = request.args.get('collection', '') %}
+  {% set active_timeframe = request.args.get('timeframe', '') %}
+  {% set active_region = request.args.get('region', '') %}
 
-      <ul class="menu w-full">
+  <aside class="app-sidebar">
 
-        <li class="menu-title">
-          <span>Timeline</span>
-        </li>
-
-        <li>
-          <a href="#">
-            Past
-          </a>
-        </li>
+    <ul class="menu w-full">
+      <li class="menu-title"> <span>Timeline</span> </li>
 
         <li>
-          <a href="#">
-            Present
-          </a>
+          <details {% if active_timeframe %}open{% endif %}>
+            <summary class="flex items-center gap-2">
+              <a
+                href="{{ url_for(
+                  'index',
+                  collection=active_collection or None,
+                  region=active_region or None
+                ) }}"
+                class="flex flex-1 items-center justify-between"
+                title="Show all time periods"
+                onclick="event.stopPropagation();"
+              >
+                <span>Range</span>
+
+                {% if active_timeframe %}
+                  <svg
+                    class="w-4 h-4 opacity-70"
+                    xmlns="http://www.w3.org/2000/svg"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    aria-hidden="true"
+                  >
+                    <path
+                      stroke="currentColor"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="2"
+                      d="M6 18 18 6M6 6l12 12"
+                    />
+                  </svg>
+                {% endif %}
+              </a>
+            </summary>
+
+            <ul>
+              <!-- Past -->
+              <li>
+                <a
+                  href="{{ url_for(
+                    'index',
+                    timeframe='past',
+                    collection=active_collection or None,
+                    region=active_region or None
+                  ) }}"
+                  class="flex items-center gap-2
+                         {% if active_timeframe == 'past' %}
+                           bg-primary text-primary-content
+                         {% endif %}"
+                >
+                  <svg
+                    class="w-6 h-6"
+                    aria-hidden="true"
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="24"
+                    height="24"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      stroke="currentColor"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="2"
+                      d="M5 12h14M5 12l4-4m-4 4 4 4"
+                    />
+                  </svg>
+
+                  <span>Past</span>
+                </a>
+              </li>
+
+              <!-- Present -->
+              <li>
+                <a
+                  href="{{ url_for(
+                    'index',
+                    timeframe='present',
+                    collection=active_collection or None,
+                    region=active_region or None
+                  ) }}"
+                  class="flex items-center gap-2
+                         {% if active_timeframe == 'present' %}
+                           bg-primary text-primary-content
+                         {% endif %}"
+                >
+                  <svg
+                    class="w-6 h-6"
+                    aria-hidden="true"
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="24"
+                    height="24"
+                    fill="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      fill-rule="evenodd"
+                      d="M8.6 5.2A1 1 0 0 0 7 6v12a1 1 0 0 0 1.6.8l8-6a1 1 0 0 0 0-1.6l-8-6Z"
+                      clip-rule="evenodd"
+                    />
+                  </svg>
+
+                  <span>Present</span>
+                </a>
+              </li>
+
+              <!-- Future -->
+              <li>
+                <a
+                  href="{{ url_for(
+                    'index',
+                    timeframe='future',
+                    collection=active_collection or None,
+                    region=active_region or None
+                  ) }}"
+                  class="flex items-center gap-2
+                         {% if active_timeframe == 'future' %}
+                           bg-primary text-primary-content
+                         {% endif %}"
+                >
+                  <svg
+                    class="w-6 h-6"
+                    aria-hidden="true"
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="24"
+                    height="24"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      stroke="currentColor"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="2"
+                      d="M19 12H5m14 0-4 4m4-4-4-4"
+                    />
+                  </svg>
+
+                  <span>Future</span>
+                </a>
+              </li>
+            </ul>
+          </details>
         </li>
+  </ul>
+  
+  <ul class="menu w-full">
 
-        <li>
-          <a href="#">
-            Future
-          </a>
-        </li>
+	<li class="menu-title">
+	  <span>Explore</span>
+	</li>
+	
+	{% set active_collection = request.args.get('collection', '') %}
+	{% set active_region = request.args.get('region', '') %}
 
-        <li class="menu-title">
-          <span>Explore</span>
-        </li>
+	<li>
+	  <details open>
+		<summary
+		  class="flex items-center gap-2"
+		  onclick="window.location.href='{{ url_for('index', region=active_region or None) }}'; return false;">
 
-        <li>
-          <a href="#">
-            Locations
-          </a>
-        </li>
+		  <svg class="w-5 h-5 opacity-70"
+			   xmlns="http://www.w3.org/2000/svg"
+			   viewBox="0 0 24 24"
+			   fill="currentColor"
+			   aria-hidden="true">
+			<path fill-rule="evenodd"
+			      d="M11 4.717c-2.286-.58-4.16-.756-7.045-.71A1.99 1.99 0 0 0 2 6v11c0 1.133.934 2.022 2.044 2.007 2.759-.038 4.5.16 6.956.791V4.717Zm2 15.081c2.456-.631 4.198-.829 6.956-.791A2.013 2.013 0 0 0 22 16.999V6a1.99 1.99 0 0 0-1.955-1.993c-2.885-.046-4.76.13-7.045.71v15.081Z"
+			      clip-rule="evenodd"/>
+		  </svg>
 
-        <li>
-          <a href="#">
-            Topics
-          </a>
-        </li>
+		  <span>Topics</span>
+		</summary>
 
-        <li>
-          <a href="#">
-            Streams
-          </a>
-        </li>
+		<ul>
+		  <li>
+			<a href="{{ url_for('index', region=active_region or None, collection='crypto') }}"
+			   class="btn btn-sm w-full justify-start {% if active_collection == 'crypto' %}btn-primary{% else %}btn-ghost{% endif %}">
+			  Crypto-Currencies
+			</a>
+		  </li>
 
-        <li class="menu-title">
-          <span>Saved locations</span>
-        </li>
+		  <li>
+			<a href="{{ url_for('index', region=active_region or None, collection='ljh') }}"
+			   class="btn btn-sm w-full justify-start {% if active_collection == 'ljh' %}btn-primary{% else %}btn-ghost{% endif %}">
+			  Lost Jewish Histories
+			</a>
+		  </li>
 
-        <li>
-          <a href="#">
-            Jewish Quarter
-          </a>
-        </li>
+		  <li>
+			<a href="{{ url_for('index', region=active_region or None, collection='remote_viewing') }}"
+			   class="btn btn-sm w-full justify-start {% if active_collection == 'remote_viewing' %}btn-primary{% else %}btn-ghost{% endif %}">
+			  General Remote-Viewings
+			</a>
+		  </li>
+		</ul>
+	  </details>
+	</li>
 
-        <li>
-          <a href="#">
-            Jerusalem
-          </a>
-        </li>
+    <li class="menu-title">
+      <span>LOCATION</span>
+    </li>
 
-        <li>
-          <a href="#">
-            Tokyo
-          </a>
-        </li>
+<li>
+  <details {% if active_region %}open{% endif %}>
 
-      </ul>
+    <summary class="flex items-center gap-2">
 
-    </aside>
+      <a
+        href="{{ url_for(
+          'index',
+          collection=active_collection or None,
+          timeframe=active_timeframe or None
+        ) }}"
+        class="flex flex-1 items-center justify-between"
+        title="Clear region selection"
+        onclick="event.stopPropagation();"
+      >
+        <span>Regions</span>
+
+        {% if active_region %}
+          <svg
+            class="w-4 h-4 opacity-70"
+            xmlns="http://www.w3.org/2000/svg"
+            fill="none"
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+          >
+            <path
+              stroke="currentColor"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M6 18 18 6M6 6l12 12"
+            />
+          </svg>
+        {% endif %}
+      </a>
+
+    </summary>
+
+    <ul>
+    <li>
+      <details {% if not active_region or active_region.startswith('asia') %}open{% endif %}>
+
+        <summary
+          class="flex items-center gap-2 {% if active_region == 'asia' %}bg-primary text-primary-content{% endif %}"
+          onclick="window.location.href='{{ url_for('index', region='asia', collection=active_collection or None) }}'; return false;">
+
+          <svg class="w-4 h-4 opacity-70"
+               xmlns="http://www.w3.org/2000/svg"
+               viewBox="0 0 8 8"
+               fill="currentColor"
+               aria-hidden="true">
+            <path d="M0 4c0-5 8-5 8 0S0 9 0 4m7-2C5 0 0 1 1 4l1 2 1-2 1 2 .5-1Q6 5 6 3l1 1M5 7.5 6 7 4 6"/>
+          </svg>
+
+          <span>Asia</span>
+        </summary>
+
+        <ul>
+          <li>
+            <a href="{{ url_for('index', region='asia/japan', collection=active_collection or None) }}"
+               class="btn btn-sm w-full justify-start {% if active_region == 'asia/japan' %}btn-primary{% else %}btn-ghost{% endif %}">
+              Japan
+            </a>
+          </li>
+
+          <li>
+            <a href="{{ url_for('index', region='asia/thailand', collection=active_collection or None) }}"
+               class="btn btn-sm w-full justify-start {% if active_region == 'asia/thailand' %}btn-primary{% else %}btn-ghost{% endif %}">
+              Thailand
+            </a>
+          </li>
+
+          <li>
+            <a href="{{ url_for('index', region='asia/malaysia', collection=active_collection or None) }}"
+               class="btn btn-sm w-full justify-start {% if active_region == 'asia/malaysia' %}btn-primary{% else %}btn-ghost{% endif %}">
+              Malaysia
+            </a>
+          </li>
+
+          <li>
+            <a href="{{ url_for('index', region='asia/singapore', collection=active_collection or None) }}"
+               class="btn btn-sm w-full justify-start {% if active_region == 'asia/singapore' %}btn-primary{% else %}btn-ghost{% endif %}">
+              Singapore
+            </a>
+          </li>
+
+          <li>
+            <a href="{{ url_for('index', region='asia/indonesia', collection=active_collection or None) }}"
+               class="btn btn-sm w-full justify-start {% if active_region == 'asia/indonesia' %}btn-primary{% else %}btn-ghost{% endif %}">
+              Indonesia
+            </a>
+          </li>
+        </ul>
+
+      </details>
+    </li>
+
+    <li>
+      <details {% if active_region.startswith('australia') %}open{% endif %}>
+
+        <summary
+          class="flex items-center gap-2 {% if active_region == 'australia' %}bg-primary text-primary-content{% endif %}"
+          onclick="window.location.href='{{ url_for('index', region='australia', collection=active_collection or None) }}'; return false;">
+
+          <svg class="w-4 h-4 opacity-70"
+               xmlns="http://www.w3.org/2000/svg"
+               viewBox="0 0 512 512"
+               fill="currentColor"
+               aria-hidden="true">
+            <path d="m380.37 28.839-27.24 100.215-64-48 17.405-34.46-83.863 8.079-13.541 42.38-35.512-25.482-67.16 85.62-83.008 48.593 34.81 156.752 38.87 6.518 112-64 74.38 52.082 21.62-28.094 32 72.012L424 415.452l64.549-126.398-6.014-64.703-65.404-79.297-36.762-116.215Zm-14.75 411.238 15.099 43.084 20.412-2.107 11.435-35.864-46.947-5.113Z"/>
+          </svg>
+
+          <span>Australia</span>
+        </summary>
+
+        <ul>
+          <li>
+            <a href="{{ url_for('index', region='australia/new-south-wales', collection=active_collection or None) }}"
+               class="btn btn-sm w-full justify-start {% if active_region == 'australia/new-south-wales' %}btn-primary{% else %}btn-ghost{% endif %}">
+              New South Wales
+            </a>
+          </li>
+
+          <li>
+            <a href="{{ url_for('index', region='australia/queensland', collection=active_collection or None) }}"
+               class="btn btn-sm w-full justify-start {% if active_region == 'australia/queensland' %}btn-primary{% else %}btn-ghost{% endif %}">
+              Queensland
+            </a>
+          </li>
+
+          <li>
+            <a href="{{ url_for('index', region='australia/tasmania', collection=active_collection or None) }}"
+               class="btn btn-sm w-full justify-start {% if active_region == 'australia/tasmania' %}btn-primary{% else %}btn-ghost{% endif %}">
+              Tasmania
+            </a>
+          </li>
+        </ul>
+
+      </details>
+    </li>
+
+    <li>
+      <details {% if active_region.startswith('europe') %}open{% endif %}>
+
+        <summary
+          class="flex items-center gap-2 {% if active_region == 'europe' %}bg-primary text-primary-content{% endif %}"
+          onclick="window.location.href='{{ url_for('index', region='europe', collection=active_collection or None) }}'; return false;">
+
+          <svg class="w-4 h-4 opacity-70"
+               xmlns="http://www.w3.org/2000/svg"
+               viewBox="0 0 20 20"
+               fill="currentColor"
+               aria-hidden="true">
+            <path d="M20 11a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" opacity=".2"/>
+            <path fill-rule="evenodd" d="M10 1.5a8.5 8.5 0 1 0 0 17 8.5 8.5 0 0 0 0-17ZM.5 10a9.5 9.5 0 1 1 19 0 9.5 9.5 0 0 1-19 0Z" clip-rule="evenodd"/>
+            <path fill-rule="evenodd" d="M12.006 1.68 9.91 2.928a.082.082 0 0 0 0 .141c.707.42.707 1.443 0 1.862l-.686.407a1.5 1.5 0 0 1-.503.186l-1.809.322a.5.5 0 0 0-.412.492v.353a.309.309 0 0 0 .447.276l.618-.309a1.5 1.5 0 0 1 .671-.158H10.5a.5.5 0 0 0 .4-.2l.724-.966a1.38 1.38 0 0 1 1.813-.355l.485.29c.874.526.678 1.846-.312 2.094a.145.145 0 0 0-.11.14v.379a1.5 1.5 0 0 1-.83 1.342l-.802.4a1.5 1.5 0 0 1-1.731-.28L10 9.207a.5.5 0 0 0-.424-.141l-2.563.366a.5.5 0 0 0-.345.217l-.507.76a.5.5 0 0 0-.069.399l.388 1.552.117.349a.412.412 0 0 0 .62.212 1.412 1.412 0 0 1 1.566 0l.773.516a1.5 1.5 0 0 1 .51.577l.776 1.551a1.5 1.5 0 0 1 .158.671v.787a.5.5 0 0 0 .686.464l.356-.142a.5.5 0 0 0 .305-.563L12.11 15.6c-.095-.477.054-.97.398-1.314l.066-.066a.998.998 0 0 1 .335-.221l.987-.395-.583-.582a1.5 1.5 0 0 1-.362-.587l-.359-1.076a1.131 1.131 0 0 1 0-.716c.306-.916 1.545-1.052 2.042-.224l.347.578a.44.44 0 0 0 .574.167l.022-.01a.467.467 0 0 0 .121-.748l-.351-.351a1.312 1.312 0 1 1 2.02-1.656l.252.38a.5.5 0 0 0 .416.222h.465v1h-.465a1.5 1.5 0 0 1-1.248-.668l-.252-.379a.312.312 0 1 0-.481.394l.351.351a1.467 1.467 0 0 1-.38 2.349l-.022.01a1.44 1.44 0 0 1-1.88-.546l-.346-.578a.13.13 0 0 0-.236.108l.359 1.077a.5.5 0 0 0 .12.195l.701.701c.623.126.75 1.036.105 1.294l-1.545.618-.066.066a.455.455 0 0 0-.124.411l.236 1.183a1.5 1.5 0 0 1-.914 1.687l-.356.143A1.5 1.5 0 0 1 10 17.023v-.787a.5.5 0 0 0-.053-.224l-.775-1.55a.5.5 0 0 0-.17-.193l-.773-.516a.413.413 0 0 0-.458 0 1.412 1.412 0 0 1-2.123-.728l-.128-.385-.398-1.59a1.5 1.5 0 0 1 .207-1.195l.507-.76a1.5 1.5 0 0 1 1.036-.653l2.562-.366a1.5 1.5 0 0 1 1.273.424l.137.137a.5.5 0 0 0 .577.093l.803-.4a.5.5 0 0 0 .276-.448v-.378c0-.526.358-.984.867-1.111a.145.145 0 0 0 .04-.266l-.484-.29a.38.38 0 0 0-.499.097L11.7 6.9a1.5 1.5 0 0 1-1.2.6H8.236a.5.5 0 0 0-.224.053l-.618.309A1.309 1.309 0 0 1 5.5 6.69v-.353A1.5 1.5 0 0 1 6.737 4.86l1.81-.322a.5.5 0 0 0 .167-.062L9.4 4.07a.082.082 0 0 0 0-.14 1.082 1.082 0 0 1-.002-1.86L11.494.82l.512.86Z" clip-rule="evenodd"/>
+          </svg>
+
+          <span>Europe</span>
+        </summary>
+
+        <ul>
+          <li>
+            <a href="{{ url_for('index', region='europe/eastern-europe', collection=active_collection or None) }}"
+               class="btn btn-sm w-full justify-start {% if active_region == 'europe/eastern-europe' %}btn-primary{% else %}btn-ghost{% endif %}">
+              Eastern Europe
+            </a>
+          </li>
+
+          <li>
+            <a href="{{ url_for('index', region='europe/portugal', collection=active_collection or None) }}"
+               class="btn btn-sm w-full justify-start {% if active_region == 'europe/portugal' %}btn-primary{% else %}btn-ghost{% endif %}">
+              Portugal
+            </a>
+          </li>
+
+          <li>
+            <a href="{{ url_for('index', region='europe/spain', collection=active_collection or None) }}"
+               class="btn btn-sm w-full justify-start {% if active_region == 'europe/spain' %}btn-primary{% else %}btn-ghost{% endif %}">
+              Spain
+            </a>
+          </li>
+
+          <li>
+            <a href="{{ url_for('index', region='europe/france', collection=active_collection or None) }}"
+               class="btn btn-sm w-full justify-start {% if active_region == 'europe/france' %}btn-primary{% else %}btn-ghost{% endif %}">
+              France
+            </a>
+          </li>
+        </ul>
+
+      </details>
+    </li>
+
+    </ul>
+
+  </details>
+</li>
+
+	<li class="menu-title">
+	  <span>Tools</span>
+	</li>
+
+	<li>
+	  <a href="/search">
+		<svg class="w-5 h-5"
+			 xmlns="http://www.w3.org/2000/svg"
+			 viewBox="0 0 24 24"
+			 fill="none">
+		  <path stroke="currentColor"
+				stroke-linecap="round"
+				stroke-width="2"
+				d="m21 21-3.5-3.5M17 10a7 7 0 1 1-14 0 7 7 0 0 1 14 0Z"/>
+		</svg>
+
+		Search
+	  </a>
+	</li>
+
+{% if ai_notebook_enabled|default(false) %}
+	<li>
+	  <a href="/notebook">
+		<svg class="w-5 h-5"
+			 xmlns="http://www.w3.org/2000/svg"
+			 viewBox="0 0 24 24"
+			 fill="currentColor">
+		  <path d="M9 6c0-1.65685 1.3431-3 3-3s3 1.34315 3 3-1.3431 3-3 3-3-1.34315-3-3Zm2 3.62992c-.1263-.04413-.25-.08799-.3721-.13131-1.33928-.47482-2.49256-.88372-4.77995-.8482C4.84875 8.66593 4 9.46413 4 10.5v7.2884c0 1.0878.91948 1.8747 1.92888 1.8616 1.283-.0168 2.04625.1322 2.79671.3587.29285.0883.57733.1863.90372.2987l.00249.0008c.11983.0413.24534.0845.379.1299.2989.1015.6242.2088.9892.3185V9.62992Zm2-.00374V20.7551c.5531-.1678 1.0379-.3374 1.4545-.4832.2956-.1034.5575-.1951.7846-.2653.7257-.2245 1.4655-.3734 2.7479-.3566.5019.0065.9806-.1791 1.3407-.4788.3618-.3011.6723-.781.6723-1.3828V10.5c0-.58114-.2923-1.05022-.6377-1.3503-.3441-.29904-.8047-.49168-1.2944-.49929-2.2667-.0352-3.386.36906-4.6847.83812-.1256.04539-.253.09138-.3832.13765Z"/>
+		</svg>
+
+		AI Notebook
+	  </a>
+	</li>
+{% endif %}
+
+{% if remote_view_enabled|default(true) %}
+	<li>
+	  <a href="/remote-view">
+		<svg class="w-5 h-5"
+			 xmlns="http://www.w3.org/2000/svg"
+			 viewBox="0 0 24 24"
+			 fill="none">
+		  <path stroke="currentColor"
+				stroke-linecap="round"
+				stroke-linejoin="round"
+				stroke-width="2"
+				d="M15 5v14m-8-7h2m0 0h2m-2 0v2m0-2v-2m12 1h-6m6 4h-6M4 19h16c.5523 0 1-.4477 1-1V6c0-.55228-.4477-1-1-1H4c-.55228 0-1 .44772-1 1v12c0 .5523.44772 1 1 1Z"/>
+		</svg>
+
+		Remote View
+	  </a>
+	</li>
+  </ul>
+{% endif %}
+
+</aside>
 
     <div class="app-content">
 
@@ -817,6 +1470,8 @@
     window.addEventListener("pageshow", resetCmsPageScroll);
     requestAnimationFrame(resetCmsPageScroll);
   </script>
+
+  {% block scripts %}{% endblock %}
 
 </body>
 </html>

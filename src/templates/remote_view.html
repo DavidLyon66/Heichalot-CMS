@@ -1,0 +1,263 @@
+{% extends "base.html" %}
+
+{% block title %}Remote Viewing — Heichalot CMS{% endblock %}
+
+{% block body_class %}remote-view-page{% endblock %}
+
+{% block head_extra %}
+<style>
+  #remote-view-stage {
+    position: relative;
+    overflow: hidden;
+    background: #101416;
+  }
+
+  #remote-view-stage-canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+    z-index: 0;
+  }
+
+  .remote-view-report,
+  .remote-view-stage-placeholder,
+  .remote-view-processing {
+    position: relative;
+    z-index: 2;
+  }
+</style>
+{% endblock %}
+
+
+{% block content %}
+
+<div class="remote-view-layout">
+
+  <section class="remote-view-centre">
+
+    <header class="remote-view-heading">
+      <div>
+        <div class="text-xs uppercase tracking-widest opacity-50">
+          Heichalot SkyLab
+        </div>
+
+        <h1 class="text-2xl font-semibold">
+          Remote Viewing
+        </h1>
+      </div>
+
+      <span class="badge badge-outline">
+        {% if latest_answer %}Report ready{% else %}Ready{% endif %}
+      </span>
+    </header>
+
+    <section
+      id="remote-view-stage"
+      class="remote-view-stage">
+
+  	  <iframe
+		  id="remote-view-scene-frame"
+		  src="{{ url_for('static', filename='remote_view_scene.html') }}"
+		  style="
+			  position:absolute;
+			  inset:0;
+			  width:100%;
+			  height:100%;
+			  border:0;
+			  display:block;
+			  background:#101416;
+			  z-index:0;
+		  ">
+	</iframe>
+
+      {% if latest_answer %}
+
+        <article
+          id="remote-view-report"
+          class="remote-view-report">
+
+          <div class="text-xs uppercase tracking-widest opacity-50">
+            Latest AI report
+          </div>
+
+          <h2 class="mt-2 text-xl font-semibold">
+            Remote-viewing response
+          </h2>
+
+          <div class="mt-5 whitespace-pre-wrap">
+            {{ latest_answer }}
+          </div>
+
+        </article>
+
+      {% else %}
+
+        <div
+          id="remote-view-stage-placeholder"
+          class="remote-view-stage-placeholder">
+
+          <div class="max-w-md">
+            <div class="text-xs uppercase tracking-widest opacity-50">
+              Heichalot SkyLab
+            </div>
+
+            <h2 class="mt-4 text-2xl font-semibold">
+              Awaiting remote-viewing request
+            </h2>
+
+            <p class="mt-3 opacity-60">
+              Enter a target or question in the conversation workspace.
+              The latest AI report will appear here.
+            </p>
+          </div>
+
+        </div>
+
+      {% endif %}
+
+      <div
+        id="remote-view-processing"
+        class="remote-view-processing">
+
+        <div class="text-center">
+          <span class="loading loading-ring loading-lg"></span>
+
+          <p class="mt-3 font-medium">
+            Remote viewing in progress
+          </p>
+        </div>
+
+      </div>
+
+    </section>
+
+  </section>
+
+  <aside class="remote-view-workspace">
+
+    <header class="remote-view-workspace-header">
+
+      <div class="flex items-center justify-between gap-3">
+
+        <div>
+          <h2 class="font-semibold">
+            Conversation
+          </h2>
+
+          <p class="text-xs opacity-55">
+            {% if conversation %}
+              {{ conversation|length }} message{% if conversation|length != 1 %}s{% endif %}
+            {% else %}
+              New remote-viewing session
+            {% endif %}
+          </p>
+        </div>
+
+        <form
+          method="post"
+          action="{{ url_for('remote_view_reset') }}">
+
+          <button
+            type="submit"
+            class="btn btn-sm btn-outline"
+            {% if not conversation %}disabled{% endif %}>
+            Finish
+          </button>
+
+        </form>
+
+      </div>
+
+    </header>
+
+    <div
+      id="remote-view-conversation"
+      class="remote-view-conversation">
+
+      {% if not conversation %}
+
+        <div class="chat chat-start">
+          <div class="chat-header text-xs opacity-60">
+            Remote-viewing AI
+          </div>
+
+          <div class="chat-bubble">
+            What would you like to remote-view?
+          </div>
+        </div>
+
+      {% endif %}
+
+      {% for message in conversation %}
+
+        {% if message.role == "user" %}
+
+          <div class="chat chat-end">
+            <div class="chat-header text-xs opacity-60">
+              You
+            </div>
+
+            <div class="chat-bubble chat-bubble-primary whitespace-pre-wrap">
+              {{ message.content }}
+            </div>
+          </div>
+
+        {% else %}
+
+          <div class="chat chat-start">
+            <div class="chat-header text-xs opacity-60">
+              Remote-viewing AI
+            </div>
+
+            <div class="chat-bubble whitespace-pre-wrap">
+              {{ message.content }}
+            </div>
+          </div>
+
+        {% endif %}
+
+      {% endfor %}
+
+      <div id="remote-view-conversation-end"></div>
+
+    </div>
+
+    <footer class="remote-view-composer">
+
+      <form
+        method="post"
+        action="{{ url_for('remote_view') }}">
+
+        <textarea
+          name="message"
+          class="textarea textarea-bordered w-full"
+          rows="4"
+          placeholder="Enter a target, question or remote-viewing request..."
+          required></textarea>
+
+        <div class="mt-3 flex items-center justify-between gap-3">
+
+          <span class="text-xs opacity-50">
+            Responses are processed synchronously.
+          </span>
+
+          <button
+            type="submit"
+            class="btn btn-primary">
+            Send
+          </button>
+
+        </div>
+
+      </form>
+
+    </footer>
+
+  </aside>
+
+</div>
+
+{% endblock %}
+
