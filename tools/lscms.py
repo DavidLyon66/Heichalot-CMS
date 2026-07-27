@@ -17,6 +17,12 @@ Examples:
     python3 tools/lscms.py --long
     python3 tools/lscms.py --cms ~/heichalot-tech/cms
     python3 tools/lscms.py --json
+    python3 tools/lscms.py --location australia
+    python3 tools/lscms.py --location australia --debug-location
+    python3 tools/lscms.py --tag "lhj-*"
+    python3 tools/lscms.py --tag "Disclosure Day Files"
+    python3 tools/lscms.py --timeframe ancient
+    python3 tools/lscms.py --timeframe future
 """
 
 from __future__ import annotations
@@ -26,6 +32,9 @@ import configparser
 import json
 import os
 import re
+import fnmatch
+
+import yaml
 import sys
 from dataclasses import dataclass, asdict
 from datetime import datetime, timedelta
@@ -41,7 +50,14 @@ TOOLS_DIR = REPO_ROOT / "tools"
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(TOOLS_DIR))
 
-from config import default_config_path, load_app_config
+from config import (
+    default_config_path,
+    load_app_config,
+    TIMEFRAME_CHOICES,
+    location_search_keys_match,
+    matches_timeframe,
+    resolve_location,
+)
 
 CONFIG_PATH = default_config_path()
 console = Console()
@@ -76,6 +92,11 @@ class EntryInfo:
     created_epoch: float
     current: bool
     markers: List[str]
+    location_text: str
+    location_search_keys: List[str]
+    tags: List[str]
+    year: Optional[int]
+    futurist: bool
 
 
 def eprint(*args: object) -> None:
@@ -114,6 +135,38 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help="Sort by modified or created time (default: modified)",
     )
     parser.add_argument(
+        "--location",
+        default=None,
+        help=(
+            "Only show entries matching any resolved geographic level, "
+            "for example europe, australia, brisbane, or new-farm."
+        ),
+    )
+    parser.add_argument(
+        "--debug-location",
+        action="store_true",
+        help="Print location metadata and resolver details for every scanned entry.",
+    )
+    parser.add_argument(
+        "--tag",
+        action="append",
+        default=[],
+        help=(
+            "Only show entries matching a tag. Shell wildcards are supported, "
+            "for example --tag 'lhj-*'. The option may be repeated; repeated "
+            "filters use AND semantics."
+        ),
+    )
+    parser.add_argument(
+        "--timeframe",
+        choices=TIMEFRAME_CHOICES,
+        default=None,
+        help=(
+            "Only show entries in a broad editorial timeframe: "
+            "ancient, past, present, or future."
+        ),
+    )
+    parser.add_argument(
         "--long",
         action="store_true",
         dest="long_output",
@@ -124,6 +177,11 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         action="store_true",
         help="Emit JSON instead of text",
     )
+    parser.add_argument(
+        "--kind",
+        default=None,
+        help="Only show entries of this kind (short or long form)."
+    )    
     return parser.parse_args(argv)
 
 
@@ -359,11 +417,33 @@ def build_entry_info(
     entry_dir: Path,
     current_entry: Optional[str],
     type_map: Optional[dict[str, str]] = None,
+    debug_location: bool = False,
 ) -> EntryInfo:
 
     modified = choose_activity_timestamp(entry_dir)
     created = choose_created_timestamp(entry_dir)
     entry_id = entry_dir.name
+    metadata = extract_story_metadata(entry_dir)
+    location_text = extract_location(entry_dir, metadata)
+    location_result = resolve_location(location_text)
+    location_search_keys = list(location_result.get("search_keys", ()))
+    tags = extract_tags(entry_dir, metadata)
+    year = extract_year(metadata)
+    futurist = extract_futurist(metadata)
+
+    if debug_location:
+        eprint(
+            "[location-debug/lscms]",
+            entry_id,
+            f"metadata_keys={sorted(metadata)}",
+            f"location_text={location_text!r}",
+            f"status={location_result.get('status')!r}",
+            f"match_method={location_result.get('match_method')!r}",
+            f"search_keys={location_search_keys!r}",
+            f"unmatched={location_result.get('unmatched_components', [])!r}",
+            f"ambiguous={location_result.get('ambiguous_components', [])!r}",
+        )
+
     return EntryInfo(
         entry_id=entry_id,
         path=str(entry_dir),
@@ -375,6 +455,11 @@ def build_entry_info(
         created_epoch=created,
         current=(current_entry == entry_id),
         markers=collect_markers(entry_dir),
+        location_text=location_text,
+        location_search_keys=location_search_keys,
+        tags=tags,
+        year=year,
+        futurist=futurist,
     )
 
 
@@ -387,6 +472,164 @@ def filter_by_days(entries: List[EntryInfo], days: Optional[int], sort_key: str)
         return [e for e in entries if e.created_epoch >= cutoff_epoch]
     return [e for e in entries if e.last_activity_epoch >= cutoff_epoch]
 
+
+def filter_by_location(
+    entries: List[EntryInfo],
+    wanted_location: Optional[str],
+) -> List[EntryInfo]:
+    if not wanted_location or not wanted_location.strip():
+        return entries
+
+    return [
+        entry
+        for entry in entries
+        if location_search_keys_match(
+            entry.location_search_keys,
+            wanted_location,
+        )
+    ]
+
+
+def _normalise_tag(value: object) -> str:
+    """Return a case-insensitive comparison form while preserving spaces."""
+    return " ".join(str(value).strip().casefold().split())
+
+
+def _parse_tag_filter(value: str) -> List[str]:
+    """Accept a plain tag or YAML/JSON list syntax from the command line."""
+    text = str(value).strip()
+    if not text:
+        return []
+
+    try:
+        parsed = yaml.safe_load(text)
+    except yaml.YAMLError:
+        parsed = text
+
+    if isinstance(parsed, (list, tuple, set)):
+        return [str(item).strip() for item in parsed if str(item).strip()]
+
+    return [str(parsed).strip()] if str(parsed).strip() else []
+
+
+def tag_matches(tags: Sequence[str], wanted: str) -> bool:
+    """Match one requested tag using case-insensitive shell wildcard rules."""
+    pattern = _normalise_tag(wanted)
+    if not pattern:
+        return True
+
+    return any(
+        fnmatch.fnmatchcase(_normalise_tag(tag), pattern)
+        for tag in tags
+    )
+
+
+def filter_by_tags(
+    entries: List[EntryInfo],
+    wanted_values: Sequence[str],
+) -> List[EntryInfo]:
+    """Apply every repeated --tag filter; each filter may contain a list."""
+    patterns: List[str] = []
+    for value in wanted_values:
+        patterns.extend(_parse_tag_filter(value))
+
+    if not patterns:
+        return entries
+
+    return [
+        entry
+        for entry in entries
+        if all(tag_matches(entry.tags, pattern) for pattern in patterns)
+    ]
+
+
+
+def extract_year(metadata: dict[str, str]) -> Optional[int]:
+    """Return the subject year from year, datetime, or date metadata."""
+
+    raw_year = (metadata.get("year") or "").strip()
+    if raw_year:
+        try:
+            return int(raw_year)
+        except ValueError:
+            return None
+
+    raw_date = (
+        metadata.get("datetime")
+        or metadata.get("date")
+        or ""
+    ).strip()
+    match = re.match(r"^\s*(-?\d{1,6})", raw_date)
+    if not match:
+        return None
+
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
+def extract_futurist(metadata: dict[str, str]) -> bool:
+    """Return the explicit futurist marker from story metadata."""
+
+    raw = metadata.get("futurist")
+    if raw is None:
+        return False
+
+    if isinstance(raw, bool):
+        return raw
+
+    return str(raw).strip().casefold() in {
+        "1",
+        "true",
+        "yes",
+        "y",
+        "on",
+    }
+
+
+def filter_by_timeframe(
+    entries: List[EntryInfo],
+    timeframe: Optional[str],
+    *,
+    current_year: Optional[int] = None,
+) -> List[EntryInfo]:
+    """Apply one broad timeframe restrictor."""
+
+    if not timeframe:
+        return entries
+
+    return [
+        entry
+        for entry in entries
+        if matches_timeframe(
+            entry,
+            timeframe,
+            current_year=current_year,
+        )
+    ]
+
+def filter_by_kind(entries, wanted_kind):
+    if not wanted_kind:
+        return entries
+
+    wanted = wanted_kind.strip().casefold()
+
+    # Build short->long and long->long maps from config.ini
+    cfg, _, _ = load_app_config(setup_if_missing=False)
+
+    mapping = {}
+    if cfg.has_section("entry_types"):
+        for short, long in cfg.items("entry_types"):
+            mapping[short.casefold()] = long.casefold()
+            mapping[long.casefold()] = long.casefold()
+
+    wanted = mapping.get(wanted, wanted)
+
+    return [
+        e for e in entries
+        if mapping.get(e.type_code.casefold(), e.type_code.casefold()) == wanted
+    ]
 
 def sort_entries(entries: List[EntryInfo], sort_key: str) -> List[EntryInfo]:
     if sort_key == "created":
@@ -449,21 +692,22 @@ def find_primary_story_file(entry_dir: Path) -> Optional[Path]:
     return None
 
 
-def extract_type(entry_dir: Path, type_map: dict[str, str]) -> str:
+def extract_story_metadata(entry_dir: Path) -> dict[str, str]:
+    """Read simple scalar values from the primary story YAML header."""
+
     story = find_primary_story_file(entry_dir)
     if story is None:
-        return "?"
+        return {}
 
     try:
         lines = story.read_text(encoding="utf-8").splitlines()
-    except Exception:
-        return "?"
+    except (OSError, UnicodeError):
+        return {}
 
     if not lines or lines[0].strip() != "---":
-        return "?"
+        return {}
 
     values: dict[str, str] = {}
-
     for line in lines[1:]:
         if line.strip() == "---":
             break
@@ -473,11 +717,47 @@ def extract_type(entry_dir: Path, type_map: dict[str, str]) -> str:
         key, value = line.split(":", 1)
         values[key.strip().lower()] = value.strip().strip('"').strip("'")
 
-    raw_kind = (
-        values.get("type")
-        or values.get("kind")
-        or ""
-    ).strip().lower()
+    return values
+
+
+def extract_location(
+    entry_dir: Path,
+    metadata: Optional[dict[str, str]] = None,
+) -> str:
+    """Return the location_text value, accepting legacy location as fallback."""
+
+    values = metadata if metadata is not None else extract_story_metadata(entry_dir)
+    return (values.get("location_text") or values.get("location") or "").strip()
+
+
+def extract_tags(
+    entry_dir: Path,
+    metadata: Optional[dict[str, str]] = None,
+) -> List[str]:
+    """Return tags from a YAML list or a legacy comma-separated scalar."""
+
+    values = metadata if metadata is not None else extract_story_metadata(entry_dir)
+    raw = (values.get("tags") or "").strip()
+    if not raw:
+        return []
+
+    try:
+        parsed = yaml.safe_load(raw)
+    except yaml.YAMLError:
+        parsed = raw
+
+    if isinstance(parsed, (list, tuple, set)):
+        return [str(tag).strip() for tag in parsed if str(tag).strip()]
+
+    if isinstance(parsed, str):
+        return [part.strip() for part in parsed.split(",") if part.strip()]
+
+    return [str(parsed).strip()] if str(parsed).strip() else []
+
+
+def extract_type(entry_dir: Path, type_map: dict[str, str]) -> str:
+    values = extract_story_metadata(entry_dir)
+    raw_kind = (values.get("type") or values.get("kind") or "").strip().lower()
 
     if not raw_kind:
         return "?"
@@ -495,6 +775,98 @@ def load_entry_type_map(cfg):
 
     return out
 
+def export_entries_json(
+    cms_dir: Path | str | None = None,
+    config_path: Path | str | None = None,
+) -> list[dict]:
+    """
+    Return every CMS filesystem entry as dictionaries suitable for loading
+    into SQLite.
+
+    This is the reusable library equivalent of `lscms.py --json`, but it:
+    - does not apply the command-line limit;
+    - does not print JSON;
+    - includes database-oriented metadata fields.
+    """
+
+    resolved_config_path = (
+        str(config_path)
+        if config_path is not None
+        else str(CONFIG_PATH)
+    )
+
+    cfg, _cfg_path, paths = load_app_config(resolved_config_path)
+
+    if cms_dir is None:
+        resolved_cms_dir = paths.cms_dir
+    else:
+        resolved_cms_dir = Path(cms_dir).expanduser().resolve()
+
+    current_entry = get_current_entry(cfg)
+    type_map = load_entry_type_map(cfg)
+
+    rows: list[dict] = []
+
+    for entry_dir in iter_entry_dirs(resolved_cms_dir):
+        entry = build_entry_info(
+            entry_dir,
+            current_entry,
+            type_map,
+        )
+
+        metadata = extract_story_metadata(entry_dir)
+
+        # Preserve useful metadata in the same format expected by the
+        # Flask server's parse_yaml_header() function.
+        yaml_header = yaml.safe_dump(
+            metadata,
+            allow_unicode=True,
+            sort_keys=False,
+            default_flow_style=False,
+        ).strip()
+
+        stream_name = (
+            metadata.get("stream_name")
+            or metadata.get("stream")
+            or ""
+        ).strip()
+
+        status = (
+            metadata.get("status")
+            or "draft"
+        ).strip().casefold()
+
+        row = asdict(entry)
+
+        # Add names expected by the SQLite startup loader.
+        row.update(
+            {
+                "stream_name": stream_name,
+                "status": status,
+                "yaml_header": yaml_header,
+
+                # Convenient aliases for the entries table timestamps.
+                "created_at": entry.created_iso,
+                "updated_at": entry.last_activity_iso,
+
+                # Preserve the filesystem location for future direct
+                # rendering of local entries.
+                "filesystem_path": entry.path,
+            }
+        )
+
+        rows.append(row)
+
+    rows.sort(
+        key=lambda row: (
+            float(row.get("last_activity_epoch", 0)),
+            str(row.get("entry_id", "")),
+        ),
+        reverse=True,
+    )
+    
+    return rows
+    
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)
     if args.limit < 1:
@@ -510,11 +882,24 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     current_entry = get_current_entry(cfg)
     type_map = load_entry_type_map(cfg)
 
+    if args.debug_location:
+        os.environ["HEICHALOT_LOCATION_DEBUG"] = "1"
+        eprint(f"[location-debug/lscms] cms_dir={cms_dir}")
+
     entries = [
-        build_entry_info(entry_dir, current_entry, type_map)
+        build_entry_info(
+            entry_dir,
+            current_entry,
+            type_map,
+            debug_location=args.debug_location,
+        )
         for entry_dir in iter_entry_dirs(cms_dir)
     ]
     entries = filter_by_days(entries, args.days, args.by)
+    entries = filter_by_location(entries, args.location)
+    entries = filter_by_tags(entries, args.tag)
+    entries = filter_by_timeframe(entries, args.timeframe)
+    entries = filter_by_kind(entries, args.kind)
     entries = sort_entries(entries, args.by)[: args.limit]
 
     if args.json:

@@ -3,6 +3,25 @@ from __future__ import annotations
 import argparse, html, json, re
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+import sys
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+TOOLS_DIR = REPO_ROOT / "tools"
+
+sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(TOOLS_DIR))
+
+from config import (
+    default_config_path,
+    load_app_config,
+    TIMEFRAME_CHOICES,
+    location_search_keys_match,
+    matches_timeframe,
+    resolve_location,
+    resolve_path,
+)
+
+CONFIG_PATH = default_config_path()
 
 try:
     from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -191,6 +210,105 @@ def markdown_to_html(md_text: str) -> Tuple[str, Optional[str]]:
         flush_code()
     return "\n".join(blocks), first_h1
 
+def story_markdown_to_html(
+    entry_id: str,
+    filename: str | None = None,
+    *,
+    cms_dir: Path | str | None = None,
+) -> dict[str, str]:
+    """
+    Find and render story Markdown files for one CMS entry.
+
+    Parameters
+    ----------
+    entry_id:
+        CMS entry directory name, such as ``entry-0000147``.
+
+    filename:
+        Optional specific basename, such as ``story.md``.
+        When omitted, every ``story*.md`` file in the entry
+        directory is rendered.
+
+    cms_dir:
+        Optional CMS-root override, primarily for tests.
+        When omitted, the CMS directory is resolved through config.py.
+
+    Returns
+    -------
+    dict[str, str]
+        Mapping of source filename to rendered HTML fragment.
+
+        Example::
+
+            {
+                "story.md": "<h1>...</h1><p>...</p>",
+                "story-free.md": "<h1>...</h1><p>...</p>",
+            }
+    """
+
+    entry_id = str(entry_id).strip()
+
+    if not entry_id:
+        raise ValueError("entry_id cannot be empty")
+
+    # Entry IDs must be directory names, not paths supplied by callers.
+    if Path(entry_id).name != entry_id:
+        raise ValueError(
+            f"entry_id must be a directory name, not a path: {entry_id!r}"
+        )
+
+    cms_root = (
+        Path(cms_dir).expanduser().resolve()
+        if cms_dir is not None
+        else resolve_path("cms")
+    )
+
+    entry_dir = cms_root / entry_id
+
+    if not entry_dir.is_dir():
+        raise FileNotFoundError(
+            f"CMS entry directory not found: {entry_dir}"
+        )
+
+    if filename is not None:
+        filename = str(filename).strip()
+
+        if not filename:
+            raise ValueError("filename cannot be empty")
+
+        if Path(filename).name != filename:
+            raise ValueError(
+                f"filename must be a basename, not a path: {filename!r}"
+            )
+
+        candidates = [entry_dir / filename]
+
+    else:
+        candidates = sorted(
+            path
+            for path in entry_dir.glob("story*.md")
+            if path.is_file()
+        )
+
+    rendered: dict[str, str] = {}
+
+    for story_path in candidates:
+        if not story_path.is_file():
+            continue
+
+        story_text = story_path.read_text(encoding="utf-8")
+
+        _frontmatter, markdown_body = split_frontmatter(story_text)
+
+        if has_dialog_blocks(markdown_body):
+            markdown_body = preprocess_dialogs(markdown_body)
+
+        body_html, _first_h1 = markdown_to_html(markdown_body)
+
+        rendered[story_path.name] = body_html
+
+    return rendered
+
 def resolve_story_path(input_value: str) -> Path:
     path = Path(input_value)
     return path / "story.md" if path.is_dir() else path
@@ -375,7 +493,6 @@ def _compat_story_body_html(story_file: Path, body_text: str) -> str:
         para.append(line)
     flush_para(); flush_items(); return '\n'.join(out)
 
-
 def generate_html(story_file: Path | str | None = None, *, output: Path | str | None = None, fragment: bool = False, header_fields: Optional[List[str]] = None) -> str:
     story_path=Path(story_file or 'story.md').expanduser().resolve()
     if story_path.is_dir(): story_path=story_path/'story.md'
@@ -428,6 +545,6 @@ def main() -> int:
     output_path.write_text(html_text, encoding="utf-8")
     print(f"Wrote: {output_path}")
     return 0
-
+    
 if __name__ == "__main__":
     raise SystemExit(main())
