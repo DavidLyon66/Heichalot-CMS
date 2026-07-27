@@ -1,0 +1,786 @@
+schema_version: 1
+language: en
+generated_from: cms-location-scan.json
+regions:
+  africa:
+    label: Africa
+    aliases:
+    - africa
+    - egypt
+    cms_occurrences: 3
+    places:
+      egypt:
+        label: Egypt
+        aliases:
+        - egypt
+        cms_occurrences: 3
+        towns: {}
+  america:
+    label: America
+    aliases:
+    - america
+    - atlanta
+    - usa
+    - usa/los angeles
+    - usa/new york
+    cms_occurrences: 7
+    places:
+      united-states:
+        label: United States
+        aliases:
+        - atlanta
+        - united states
+        - usa
+        - usa/los angeles
+        - usa/new york
+        cms_occurrences: 7
+        towns:
+          atlanta:
+            label: Atlanta
+            aliases:
+            - atlanta
+            centre:
+              lat: 33.749
+              lon: -84.388
+              reference: Atlanta city centre
+            radius_km: 30
+            cms_occurrences: 1
+          los-angeles:
+            label: Los Angeles
+            aliases:
+            - los angeles
+            - usa/los angeles
+            centre:
+              lat: 34.0522
+              lon: -118.2437
+              reference: Los Angeles city centre
+            radius_km: 45
+            cms_occurrences: 1
+          new-york:
+            label: New York
+            aliases:
+            - new york
+            - usa/new york
+            centre:
+              lat: 40.7128
+              lon: -74.006
+              reference: New York city centre
+            radius_km: 40
+            cms_occurrences: 1
+  asia:
+    label: Asia
+    aliases:
+    - asia
+    - asia/malaysia
+    - asia/singapore
+    - cambodia/angkor wat
+    - china/beijing
+    - indonesia/aceh
+    - indonesia/semarang
+    - indonesia/sumatra
+    - iraq/baghdad
+    - israel
+    - israel/galilee sea
+    - israel/gaza
+    - israel/hinnom valley
+    - israel/jaffa
+    - israel/jerusalem
+    - israel/jerusalem/jaffa road
+    - israel/samaria
+    - izmir
+    - japan
+    - japan/hokkaido
+    - japan/oyamazumi shrine
+    - japan/oyazumi shrine
+    - japan/tokyo
+    - japan/tokyo/tokyo station
+    - lebanon/tyre
+    - philippines
+    - singapore
+    - syria
+    - syria/harrat al-sham
+    - thailand
+    - thailand/bangkok
+    - thailand/khu bua
+    - thailand/th si
+    - turkey/izmir
+    - turkey/nicea
+    cms_occurrences: 64
+    places:
+      cambodia:
+        label: Cambodia
+        aliases:
+        - cambodia
+        - cambodia/angkor wat
+        cms_occurrences: 2
+        towns:
+          siem-reap:
+            label: Siem Reap
+            aliases:
+            - cambodia/angkor wat
+            - siem reap
+            centre:
+              lat: 13.3633
+              lon: 103.8564
+              reference: Siem Reap city centre
+            radius_km: 20
+            cms_occurrences: 2
+      china:
+        label: China
+        aliases:
+        - china
+        - china/beijing
+        cms_occurrences: 1
+        towns:
+          beijing:
+            label: Beijing
+            aliases:
+            - beijing
+            - china/beijing
+            centre:
+              lat: 39.9042
+              lon: 116.4074
+              reference: Beijing city centre
+            radius_km: 40
+            cms_occurrences: 1
+      indonesia:
+        label: Indonesia
+        aliases:
+        - indonesia
+        - indonesia/aceh
+        - indonesia/semarang
+        - indonesia/sumatra
+        cms_occurrences: 3
+        towns:
+          aceh:
+            label: Aceh
+            aliases:
+            - aceh
+            - indonesia/aceh
+            centre:
+              lat: 4.6951
+              lon: 96.7494
+              reference: Aceh city centre
+            radius_km: 220
+            cms_occurrences: 1
+          semarang:
+            label: Semarang
+            aliases:
+            - indonesia/semarang
+            - semarang
+            centre:
+              lat: -6.9667
+              lon: 110.4167
+              reference: Semarang city centre
+            radius_km: 22
+            cms_occurrences: 1
+          sumatra:
+            label: Sumatra
+            aliases:
+            - indonesia/sumatra
+            - sumatra
+            centre:
+              lat: -0.5897
+              lon: 101.3431
+              reference: Sumatra city centre
+            radius_km: 900
+            cms_occurrences: 1
+      iraq:
+        label: Iraq
+        aliases:
+        - iraq
+        - iraq/baghdad
+        cms_occurrences: 4
+        towns:
+          baghdad:
+            label: Baghdad
+            aliases:
+            - baghdad
+            - iraq/baghdad
+            centre:
+              lat: 33.3152
+              lon: 44.3661
+              reference: Baghdad city centre
+            radius_km: 30
+            cms_occurrences: 4
+      israel:
+        label: Israel
+        aliases:
+        - israel
+        - israel/galilee sea
+        - israel/gaza
+        - israel/hinnom valley
+        - israel/jaffa
+        - israel/jerusalem
+        - israel/jerusalem/jaffa road
+        - israel/samaria
+        cms_occurrences: 20
+        towns:
+          gaza:
+            label: Gaza
+            aliases:
+            - gaza
+            - israel/gaza
+            centre:
+              lat: 31.5017
+              lon: 34.4668
+              reference: Gaza city centre
+            radius_km: 15
+            cms_occurrences: 1
+          jerusalem:
+            label: Jerusalem
+            aliases:
+            - israel/hinnom valley
+            - israel/jerusalem
+            - israel/jerusalem/jaffa road
+            - jerusalem
+            centre:
+              lat: 31.778
+              lon: 35.235
+              reference: Jerusalem city centre
+            radius_km: 18
+            cms_occurrences: 3
+          samaria:
+            label: Samaria
+            aliases:
+            - israel/samaria
+            - samaria
+            centre:
+              lat: 32.083
+              lon: 35.25
+              reference: Samaria city centre
+            radius_km: 70
+            cms_occurrences: 1
+          tel-aviv-jaffa:
+            label: Tel Aviv–Jaffa
+            aliases:
+            - israel/jaffa
+            - tel aviv–jaffa
+            centre:
+              lat: 32.0853
+              lon: 34.7818
+              reference: Tel Aviv–Jaffa city centre
+            radius_km: 20
+            cms_occurrences: 1
+      japan:
+        label: Japan
+        aliases:
+        - japan
+        - japan/hokkaido
+        - japan/oyamazumi shrine
+        - japan/oyazumi shrine
+        - japan/tokyo
+        - japan/tokyo/tokyo station
+        cms_occurrences: 11
+        towns:
+          tokyo:
+            label: Tokyo
+            aliases:
+            - japan/tokyo
+            - japan/tokyo/tokyo station
+            - tokyo
+            centre:
+              lat: 35.6812
+              lon: 139.7671
+              reference: Tokyo city centre
+            radius_km: 40
+            cms_occurrences: 2
+      lebanon:
+        label: Lebanon
+        aliases:
+        - lebanon
+        - lebanon/tyre
+        cms_occurrences: 1
+        towns:
+          tyre:
+            label: Tyre
+            aliases:
+            - lebanon/tyre
+            - tyre
+            centre:
+              lat: 33.2705
+              lon: 35.2038
+              reference: Tyre city centre
+            radius_km: 12
+            cms_occurrences: 1
+      malaysia:
+        label: Malaysia
+        aliases:
+        - asia/malaysia
+        - malaysia
+        cms_occurrences: 1
+        towns: {}
+      philippines:
+        label: Philippines
+        aliases:
+        - philippines
+        cms_occurrences: 2
+        towns: {}
+      singapore:
+        label: Singapore
+        aliases:
+        - asia/singapore
+        - singapore
+        cms_occurrences: 5
+        towns:
+          singapore:
+            label: Singapore
+            aliases:
+            - asia/singapore
+            - singapore
+            centre:
+              lat: 1.2903
+              lon: 103.8519
+              reference: Singapore city centre
+            radius_km: 30
+            cms_occurrences: 5
+      syria:
+        label: Syria
+        aliases:
+        - syria
+        - syria/harrat al-sham
+        cms_occurrences: 2
+        towns: {}
+      thailand:
+        label: Thailand
+        aliases:
+        - thailand
+        - thailand/bangkok
+        - thailand/khu bua
+        - thailand/th si
+        cms_occurrences: 8
+        towns:
+          bangkok:
+            label: Bangkok
+            aliases:
+            - bangkok
+            - thailand/bangkok
+            centre:
+              lat: 13.7563
+              lon: 100.5018
+              reference: Bangkok city centre
+            radius_km: 35
+            cms_occurrences: 1
+          ratchaburi:
+            label: Ratchaburi
+            aliases:
+            - ratchaburi
+            - thailand/khu bua
+            centre:
+              lat: 13.5283
+              lon: 99.8134
+              reference: Ratchaburi city centre
+            radius_km: 20
+            cms_occurrences: 4
+      turkey:
+        label: Turkey
+        aliases:
+        - izmir
+        - turkey
+        - turkey/izmir
+        - turkey/nicea
+        cms_occurrences: 3
+        towns:
+          izmir:
+            label: Izmir
+            aliases:
+            - izmir
+            - turkey/izmir
+            centre:
+              lat: 38.4237
+              lon: 27.1428
+              reference: Izmir city centre
+            radius_km: 25
+            cms_occurrences: 2
+          iznik:
+            label: Iznik
+            aliases:
+            - iznik
+            - turkey/nicea
+            centre:
+              lat: 40.4296
+              lon: 29.721
+              reference: Iznik city centre
+            radius_km: 12
+            cms_occurrences: 1
+  australia:
+    label: Australia
+    aliases:
+    - adelaide
+    - anne street brisbane
+    - arncliffe
+    - australia
+    - australia/ballarat
+    - australia/bathurst
+    - australia/brisbane/new farm
+    - australia/cairns
+    - australia/hobart
+    - australia/karvellah
+    - australia/karvellah/port
+    - australia/launceston/elizabeth st
+    - australia/melbourne/bourke street
+    - australia/mount isa
+    - australia/newcastle
+    - australia/newcastle/fort scratchley
+    - australia/newcastle/parnell place
+    - australia/nsw/canley vale
+    - australia/perth/gpo
+    - australia/randwick
+    - australia/sydney
+    - australia/sydney/143-5 york street
+    - australia/sydney/bondi beach
+    - australia/sydney/brighton le sands
+    - australia/tasmania
+    - australia/tasmania/lenah valley
+    - canberra
+    - newtown
+    - sydney
+    cms_occurrences: 40
+    places:
+      australian-capital-territory:
+        label: Australian Capital Territory
+        aliases:
+        - act
+        - australian capital territory
+        - canberra
+        cms_occurrences: 1
+        towns:
+          canberra:
+            label: Canberra
+            aliases:
+            - canberra
+            centre:
+              lat: -35.2809
+              lon: 149.13
+              reference: Canberra city centre
+            radius_km: 25
+            cms_occurrences: 1
+      new-south-wales:
+        label: New South Wales
+        aliases:
+        - arncliffe
+        - australia/bathurst
+        - australia/karvellah
+        - australia/newcastle
+        - australia/newcastle/fort scratchley
+        - australia/newcastle/parnell place
+        - australia/nsw/canley vale
+        - australia/randwick
+        - australia/sydney
+        - australia/sydney/143-5 york street
+        - australia/sydney/bondi beach
+        - australia/sydney/brighton le sands
+        - new south wales
+        - newtown
+        - nsw
+        - sydney
+        cms_occurrences: 15
+        towns:
+          bathurst:
+            label: Bathurst
+            aliases:
+            - australia/bathurst
+            - bathurst
+            centre:
+              lat: -33.4193
+              lon: 149.5775
+              reference: Bathurst city centre
+            radius_km: 15
+            cms_occurrences: 1
+          newcastle:
+            label: Newcastle
+            aliases:
+            - australia/newcastle
+            - australia/newcastle/fort scratchley
+            - australia/newcastle/parnell place
+            - newcastle
+            centre:
+              lat: -32.9283
+              lon: 151.7817
+              reference: Newcastle city centre
+            radius_km: 22
+            cms_occurrences: 3
+          sydney:
+            label: Sydney
+            aliases:
+            - arncliffe
+            - australia/karvellah
+            - australia/nsw/canley vale
+            - australia/randwick
+            - australia/sydney
+            - australia/sydney/143-5 york street
+            - australia/sydney/bondi beach
+            - australia/sydney/brighton le sands
+            - newtown
+            - sydney
+            centre:
+              lat: -33.8732
+              lon: 151.2069
+              reference: Sydney city centre
+            radius_km: 40
+            cms_occurrences: 11
+      queensland:
+        label: Queensland
+        aliases:
+        - anne street brisbane
+        - australia/brisbane/new farm
+        - australia/cairns
+        - australia/mount isa
+        - qld
+        - queensland
+        cms_occurrences: 7
+        towns:
+          brisbane:
+            label: Brisbane
+            aliases:
+            - anne street brisbane
+            - australia/brisbane/new farm
+            - brisbane
+            centre:
+              lat: -27.4698
+              lon: 153.0251
+              reference: Brisbane city centre
+            radius_km: 30
+            cms_occurrences: 5
+          cairns:
+            label: Cairns
+            aliases:
+            - australia/cairns
+            - cairns
+            centre:
+              lat: -16.9186
+              lon: 145.7781
+              reference: Cairns city centre
+            radius_km: 20
+            cms_occurrences: 1
+          mount-isa:
+            label: Mount Isa
+            aliases:
+            - australia/mount isa
+            - mount isa
+            centre:
+              lat: -20.7256
+              lon: 139.4927
+              reference: Mount Isa city centre
+            radius_km: 20
+            cms_occurrences: 1
+      south-australia:
+        label: South Australia
+        aliases:
+        - adelaide
+        - sa
+        - south australia
+        cms_occurrences: 1
+        towns:
+          adelaide:
+            label: Adelaide
+            aliases:
+            - adelaide
+            centre:
+              lat: -34.9285
+              lon: 138.6007
+              reference: Adelaide city centre
+            radius_km: 25
+            cms_occurrences: 1
+      tasmania:
+        label: Tasmania
+        aliases:
+        - australia/hobart
+        - australia/launceston/elizabeth st
+        - australia/tasmania
+        - australia/tasmania/lenah valley
+        - tas
+        - tasmania
+        cms_occurrences: 5
+        towns:
+          hobart:
+            label: Hobart
+            aliases:
+            - australia/hobart
+            - australia/tasmania/lenah valley
+            - hobart
+            centre:
+              lat: -42.8821
+              lon: 147.3272
+              reference: Hobart city centre
+            radius_km: 20
+            cms_occurrences: 3
+          launceston:
+            label: Launceston
+            aliases:
+            - australia/launceston/elizabeth st
+            - launceston
+            centre:
+              lat: -41.4332
+              lon: 147.1441
+              reference: Launceston city centre
+            radius_km: 15
+            cms_occurrences: 1
+      victoria:
+        label: Victoria
+        aliases:
+        - australia/ballarat
+        - australia/melbourne/bourke street
+        - vic
+        - victoria
+        cms_occurrences: 3
+        towns:
+          ballarat:
+            label: Ballarat
+            aliases:
+            - australia/ballarat
+            - ballarat
+            centre:
+              lat: -37.5622
+              lon: 143.8503
+              reference: Ballarat city centre
+            radius_km: 15
+            cms_occurrences: 2
+          melbourne:
+            label: Melbourne
+            aliases:
+            - australia/melbourne/bourke street
+            - melbourne
+            centre:
+              lat: -37.8136
+              lon: 144.9631
+              reference: Melbourne city centre
+            radius_km: 35
+            cms_occurrences: 1
+      western-australia:
+        label: Western Australia
+        aliases:
+        - australia/perth/gpo
+        - wa
+        - western australia
+        cms_occurrences: 1
+        towns:
+          perth:
+            label: Perth
+            aliases:
+            - australia/perth/gpo
+            - perth
+            centre:
+              lat: -31.9523
+              lon: 115.8613
+              reference: Perth city centre
+            radius_km: 35
+            cms_occurrences: 1
+  europe:
+    label: Europe
+    aliases:
+    - europe
+    - lithuania
+    - portugal/candal
+    - romania/piatra neamt
+    - romania/romanian pyramids
+    - russia/ussr
+    - slovakia/bratislava
+    - spain/valencia
+    - united kingdom/london/british museum
+    cms_occurrences: 11
+    places:
+      lithuania:
+        label: Lithuania
+        aliases:
+        - lithuania
+        cms_occurrences: 2
+        towns: {}
+      portugal:
+        label: Portugal
+        aliases:
+        - portugal
+        - portugal/candal
+        cms_occurrences: 1
+        towns:
+          candal:
+            label: Candal
+            aliases:
+            - candal
+            - portugal/candal
+            centre:
+              lat: 41.1237
+              lon: -8.6212
+              reference: Candal city centre
+            radius_km: 8
+            cms_occurrences: 1
+      romania:
+        label: Romania
+        aliases:
+        - romania
+        - romania/piatra neamt
+        - romania/romanian pyramids
+        cms_occurrences: 2
+        towns:
+          piatra-neamt:
+            label: Piatra Neamț
+            aliases:
+            - piatra neamț
+            - romania/piatra neamt
+            centre:
+              lat: 46.9275
+              lon: 26.3708
+              reference: Piatra Neamț city centre
+            radius_km: 12
+            cms_occurrences: 1
+      russia:
+        label: Russia
+        aliases:
+        - russia
+        - russia/ussr
+        cms_occurrences: 1
+        towns: {}
+      slovakia:
+        label: Slovakia
+        aliases:
+        - slovakia
+        - slovakia/bratislava
+        cms_occurrences: 1
+        towns:
+          bratislava:
+            label: Bratislava
+            aliases:
+            - bratislava
+            - slovakia/bratislava
+            centre:
+              lat: 48.1486
+              lon: 17.1077
+              reference: Bratislava city centre
+            radius_km: 18
+            cms_occurrences: 1
+      spain:
+        label: Spain
+        aliases:
+        - spain
+        - spain/valencia
+        cms_occurrences: 1
+        towns:
+          valencia:
+            label: Valencia
+            aliases:
+            - spain/valencia
+            - valencia
+            centre:
+              lat: 39.4699
+              lon: -0.3763
+              reference: Valencia city centre
+            radius_km: 22
+            cms_occurrences: 1
+      united-kingdom:
+        label: United Kingdom
+        aliases:
+        - united kingdom
+        - united kingdom/london/british museum
+        cms_occurrences: 2
+        towns:
+          london:
+            label: London
+            aliases:
+            - london
+            - united kingdom/london/british museum
+            centre:
+              lat: 51.5074
+              lon: -0.1278
+              reference: London city centre
+            radius_km: 35
+            cms_occurrences: 2
