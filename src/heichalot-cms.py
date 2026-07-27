@@ -9,6 +9,8 @@ from datetime import datetime
 import configparser
 from io import StringIO
 import re
+import fnmatch
+import random
 
 from flask import (
     Flask,
@@ -24,27 +26,27 @@ from flask import (
 )
 
 from werkzeug.security import check_password_hash, generate_password_hash
+from config import resolve_location, read_config
+
+import sys
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+TOOLS_DIR = REPO_ROOT / "tools"
+
+sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(TOOLS_DIR))
+from renderhtml import story_markdown_to_html
+from remoteviewing import generate_remote_view
 
 import threading
 import time
 import webview
 import base64
 
+
 APP_DIR = Path(__file__).resolve().parent
 
-import sys
-_repo_root = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(_repo_root / "tools"))
-from config import load_app_config
-try:
-    _cfg, _cfg_path, _paths = load_app_config(setup_if_missing=False)
-    _content_db = _paths.data_dir / "content.db"
-except Exception:
-    from config import platform_data_dir
-    _content_db = platform_data_dir() / "content.db"
-CONTENT_DB = Path(os.environ.get("HEICHALOT_CONTENT_DB", str(_content_db))).expanduser()
-del _repo_root, _content_db
-
+CONTENT_DB = Path(os.environ.get("HEICHALOT_CONTENT_DB", APP_DIR / "data" / "content.db")).expanduser()
 IMAGE_DIR = Path(os.environ.get("HEICHALOT_IMAGE_DIR", APP_DIR / "images")).expanduser()
 PDF_DIR = Path(os.environ.get("HEICHALOT_PDF_DIR", APP_DIR / "pdfs")).expanduser()
 
@@ -126,6 +128,12 @@ disclosure-day.description = These are recreations of the Disclosure Day Files.
 remote-viewing.label = Remote-Viewing
 remote-viewing.visible = Yes
 
+crypto.label = Crypto
+crypto.visible = yes
+crypto.location = toolbar
+crypto.colour = #A38658
+crypto.description = Cryptocurrency research, market analysis and remote-viewing.
+
 [theme]
 name = brown
 """
@@ -133,13 +141,10 @@ name = brown
 app = Flask(__name__)
 app.secret_key = os.environ.get("HEICHALOT_SECRET_KEY", "dev-change-this-secret-key")
 
-@app.errorhandler(sqlite3.OperationalError)
-def handle_db_error(e):
-    return render_template("error.html",
-        title="Database Error",
-        message="The content database could not be opened. "
-                "Please ensure an update has been downloaded by running <code>heichalot-update</code>.",
-    )
+# Exposed to every Jinja template through inject_globals().
+# Only the hosted server presents account/login/registration controls.
+SERVER_VARIANT = "desktop"
+AUTH_UI_ENABLED = SERVER_VARIANT == "hosted"
 
 def connect(path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(str(path))
@@ -157,28 +162,130 @@ def table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
 
 
 
-def current_user():
-    return None
+def current_user() -> Optional[sqlite3.Row]:
+    user_id = session.get("user_id")
+    if not user_id:
+        return None
+    conn = members_db()
+    try:
+        return conn.execute(
+            """
+            SELECT user_id, email, access_level, is_active, created_utc, config
+            FROM users
+            WHERE user_id = ? AND is_active = 1
+            """,
+            (user_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+def user_config(user) -> dict:
+    if not user or "config" not in user.keys() or not user["config"]:
+        return {}
+    try:
+        return yaml.safe_load(user["config"]) or {}
+    except Exception:
+        return {}
 
 def current_lang() -> str:
-    return "en"
+    user = current_user()
+    cfg = user_config(user)
+    lang = str(cfg.get("lang", "en")).strip().lower()
+    return lang if lang in VALID_LANGS else "en"
 
 def current_theme() -> str:
-    cfg = user_config_parser()
-    theme = cfg.get("theme", "name", fallback="dark") if cfg.has_section("theme") else "dark"
+    user = current_user()
+    cfg = user_config_parser(user)
+
+    theme = "dark"
+    if cfg.has_section("theme"):
+        theme = cfg.get("theme", "name", fallback="dark")
+
     theme = theme.strip().lower()
     return theme if theme in VALID_THEMES else "dark"
 
-def current_cms_stream() -> str:
-    return "free"
+
 def select_html(row: sqlite3.Row, user_level: str) -> str:
-    return row["html"] or ""
+    if user_level == "premium":
+        return row["html_premium"] or row["html_members"] or row["html_free"] or ""
+    if user_level == "members":
+        return row["html_members"] or row["html_free"] or ""
+    return row["html_free"] or ""
+
+def require_admin():
+    user = current_user()
+    if not user or user["email"] not in ADMIN_EMAILS:
+        abort(403)
+    return user
+
+def normalise_filter_value(value: object) -> str:
+    """Return a stable case-insensitive comparison value."""
+    value = str(value or "").strip().casefold()
+    value = value.replace("_", "-")
+    value = re.sub(r"\s+", "-", value)
+    value = re.sub(r"-+", "-", value)
+    return value.strip("-")
 
 
-def parse_tags(text):
-    if not text:
+def parse_tags(value) -> set[str]:
+    """Parse YAML, sequence, newline-separated, or comma-separated tags."""
+    if value in (None, ""):
         return set()
-    return {line.strip() for line in text.splitlines() if line.strip()}
+
+    if isinstance(value, (list, tuple, set)):
+        items = value
+    else:
+        raw = str(value).strip()
+        if not raw:
+            return set()
+        try:
+            parsed = yaml.safe_load(raw)
+        except yaml.YAMLError:
+            parsed = raw
+        if isinstance(parsed, (list, tuple, set)):
+            items = parsed
+        else:
+            items = re.split(r"[\n,]+", str(parsed))
+
+    return {
+        normalise_filter_value(item)
+        for item in items
+        if normalise_filter_value(item)
+    }
+
+
+def parse_bool(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value).strip().casefold() in {
+        "1", "true", "yes", "y", "on",
+    }
+
+
+def extract_subject_year(data: dict) -> int | None:
+    raw_year = data.get("year")
+    if raw_year not in (None, ""):
+        try:
+            return int(str(raw_year).strip())
+        except (TypeError, ValueError):
+            return None
+
+    raw_date = data.get("datetime") or data.get("date")
+    if raw_date in (None, ""):
+        return None
+
+    match = re.match(r"^\s*(-?\d{1,6})", str(raw_date))
+    if not match:
+        return None
+
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
 
 def extract_temporal_profile(yaml_header: str):
     if not yaml_header:
@@ -189,6 +296,7 @@ def extract_temporal_profile(yaml_header: str):
     except Exception:
         return None
 
+
 def parse_yaml_header(yaml_header: str):
     if not yaml_header:
         return {}
@@ -198,6 +306,279 @@ def parse_yaml_header(yaml_header: str):
         return {}
 
 
+
+def entry_metadata(entry: dict) -> dict:
+    """Cache YAML metadata and normalized fields used by filters."""
+    data = entry.get("_metadata")
+    if not isinstance(data, dict):
+        data = parse_yaml_header(entry.get("yaml_header"))
+        entry["_metadata"] = data
+
+    entry["_tags"] = parse_tags(data.get("tags")) | parse_tags(entry.get("tags"))
+    entry["_kind"] = normalise_filter_value(
+        data.get("kind")
+        or data.get("type")
+        or entry.get("kind")
+        or entry.get("type")
+        or ""
+    )
+    entry["_year"] = extract_subject_year(data)
+    entry["_futurist"] = parse_bool(data.get("futurist"))
+    return data
+
+def normalise_location_filter(value: str | None) -> str:
+    value = str(value or "").strip().casefold()
+    value = re.sub(r"[\s_]+", "-", value)
+    value = re.sub(r"-+", "-", value)
+    return value.strip("-")
+
+
+def matches_location_filter(
+    entry: dict,
+    location: str | None = None,
+) -> bool:
+    """Match one key or every component of a slash-delimited location path."""
+    raw = str(location or "").strip()
+    if not raw:
+        return True
+
+    wanted = {
+        normalise_location_filter(part)
+        for part in raw.split("/")
+        if part.strip()
+    }
+    available = {
+        normalise_location_filter(key)
+        for key in entry.get("location_search_keys", ())
+        if key
+    }
+    return bool(wanted) and wanted.issubset(available)
+
+
+def matches_kind_filter(entry: dict, wanted_kind: str | None) -> bool:
+    wanted = normalise_filter_value(wanted_kind)
+    if not wanted:
+        return True
+
+    aliases = {
+        "rv": "remote-viewing",
+        "remoteviewing": "remote-viewing",
+        "remote-viewing": "remote-viewing",
+        "vd": "video",
+        "yt": "youtube",
+        "st": "site",
+        "n": "note",
+    }
+    entry_metadata(entry)
+    actual = aliases.get(entry.get("_kind", ""), entry.get("_kind", ""))
+    return actual == aliases.get(wanted, wanted)
+
+
+def tag_matches(tags: set[str], pattern: str) -> bool:
+    pattern = normalise_filter_value(pattern)
+    return not pattern or any(
+        fnmatch.fnmatchcase(tag, pattern)
+        for tag in tags
+    )
+
+
+def matches_tag_filter(entry: dict, wanted_tags) -> bool:
+    """Apply repeated tag filters with AND semantics and wildcard support."""
+    if not wanted_tags:
+        return True
+
+    entry_metadata(entry)
+    patterns = []
+    for value in wanted_tags:
+        if value in (None, ""):
+            continue
+        parsed = parse_tags(value)
+        patterns.extend(parsed or {normalise_filter_value(value)})
+
+    return all(tag_matches(entry.get("_tags", set()), p) for p in patterns)
+
+
+def matches_collection_filter(entry: dict, collection: str | None) -> bool:
+    """Match broad UI collections, then fall back to stream/tag/kind."""
+    wanted = normalise_filter_value(collection)
+    if not wanted:
+        return True
+
+    entry_metadata(entry)
+    tags = entry.get("_tags", set())
+    kind = entry.get("_kind", "")
+    stream = normalise_filter_value(entry.get("stream_name"))
+
+    if wanted in {"remote-viewing", "remoteviewing", "rv"}:
+        return (
+            kind in {"remote-viewing", "remoteviewing", "rv"}
+            or "remote-viewing" in tags
+            or "rv" in tags
+            or stream == "remote-viewing"
+        )
+
+    if wanted == "ljh":
+        return (
+            stream == "ljh"
+            or stream.startswith("ljh-")
+            or any(tag == "ljh" or tag.startswith("ljh-") for tag in tags)
+        )
+
+    return stream == wanted or wanted in tags or kind == wanted
+
+
+def matches_timeframe_filter(
+    entry: dict,
+    timeframe: str | None,
+    *,
+    current_year: int | None = None,
+) -> bool:
+    """Match ancient, past, present, or explicitly marked future entries."""
+    wanted = normalise_filter_value(timeframe)
+    if not wanted:
+        return True
+    if wanted not in {"ancient", "past", "present", "future"}:
+        return False
+
+    entry_metadata(entry)
+    futurist = bool(entry.get("_futurist"))
+
+    if wanted == "future":
+        return futurist
+    if futurist:
+        return False
+
+    year = entry.get("_year")
+    if year is None:
+        return False
+
+    current_year = current_year or datetime.now().year
+    ancient_cutoff = current_year - 1500
+    present_start = current_year - 5
+
+    if wanted == "ancient":
+        return year <= ancient_cutoff
+    if wanted == "past":
+        return ancient_cutoff < year < present_start
+    return present_start <= year <= current_year
+
+
+def entry_matches_filters(
+    entry: dict,
+    *,
+    location: str | None = None,
+    collection: str | None = None,
+    kind: str | None = None,
+    tags=None,
+    timeframe: str | None = None,
+) -> bool:
+    return (
+        matches_location_filter(entry, location)
+        and matches_collection_filter(entry, collection)
+        and matches_kind_filter(entry, kind)
+        and matches_tag_filter(entry, tags)
+        and matches_timeframe_filter(entry, timeframe)
+    )
+
+
+def enrich_location(row: dict) -> dict:
+    """
+    Resolve an entry's imperfect location metadata.
+
+    The original CMS location text is retained. Additional fields are added
+    for templates and later map/filter support.
+    """
+
+    data = entry_metadata(row)
+
+    # Prefer the explicit database value, then the newer YAML fields.
+    location_text = (
+        row.get("location")
+        or data.get("location_key")
+        or data.get("location_text")
+        or data.get("location")
+        or ""
+    )
+
+    location_text = str(location_text).strip()
+
+    latitude = (
+        data.get("latitude")
+        or data.get("lat")
+        or data.get("gps_latitude")
+    )
+
+    longitude = (
+        data.get("longitude")
+        or data.get("lon")
+        or data.get("lng")
+        or data.get("gps_longitude")
+    )
+
+    result = resolve_location(
+        location_text or None,
+        latitude=latitude,
+        longitude=longitude,
+    )
+
+    row["location_text"] = location_text
+    row["resolved_location"] = result
+
+    # New flat-search fields. The YAML catalogue remains hierarchical, but
+    # runtime filtering can test simple membership against these canonical keys.
+    row["location_matched_keys"] = list(result.get("matched_keys", ()))
+    row["location_search_keys"] = list(result.get("search_keys", ()))
+    row["location_components"] = list(result.get("components", ()))
+    row["location_unmatched_components"] = list(
+        result.get("unmatched_components", ())
+    )
+
+    if result.get("status") == "matched":
+        row["location_region_key"] = result.get("region_key")
+        row["location_region_label"] = result.get("region_label")
+        row["location_place_key"] = result.get("place_key")
+        row["location_place_label"] = result.get("place_label")
+        row["location_town_key"] = result.get("town_key")
+        row["location_town_label"] = result.get("town_label")
+
+        row["location_key"] = "/".join(
+            part
+            for part in (
+                result.get("region_key"),
+                result.get("place_key"),
+                result.get("town_key"),
+            )
+            if part
+        )
+
+        row["location_label"] = " / ".join(
+            part
+            for part in (
+                result.get("place_label"),
+                result.get("town_label"),
+            )
+            if part
+        )
+
+        row["location_latitude"] = result.get("centre_lat")
+        row["location_longitude"] = result.get("centre_lon")
+        row["location_radius_km"] = result.get("radius_km")
+    else:
+        # Keep unresolved values visible rather than losing them.
+        row["location_region_key"] = None
+        row["location_region_label"] = None
+        row["location_place_key"] = None
+        row["location_place_label"] = None
+        row["location_town_key"] = None
+        row["location_town_label"] = None
+        row["location_key"] = None
+        row["location_label"] = location_text
+        row["location_latitude"] = None
+        row["location_longitude"] = None
+        row["location_radius_km"] = None
+
+    return row
+    
 def build_temporal_profile(row):
     data = parse_yaml_header(row.get("yaml_header"))
 
@@ -293,20 +674,26 @@ def user_streams(user):
 
     return streams
 
-def user_config_parser(user=None):
-    cfg = configparser.ConfigParser()
+def user_config_parser(user=None) -> configparser.ConfigParser:
+    """
+    Return stream/theme settings through one ConfigParser interface.
 
-    try:
-        cfg.read_file(StringIO(DEFAULT_USER_CONFIG))
-    except configparser.Error:
-        cfg.read_file(StringIO(DEFAULT_USER_CONFIG))
+    Hosted:
+        read the logged-in user's users.config text.
 
-    return cfg
+    Desktop/terminal:
+        read the ordinary local config.ini.
+    """
+
+    return read_config()
+    
 
 @app.context_processor
 def inject_globals():
     return {
         "current_user": current_user(),
+        "server_variant": SERVER_VARIANT,
+        "auth_ui_enabled": AUTH_UI_ENABLED,
         "site_theme": current_theme(),
         "user_lang": current_lang(),
         "content_db": str(CONTENT_DB),
@@ -318,38 +705,80 @@ def inject_globals():
 def index():
     conn = content_db()
     try:
-
-        page = max(1, int(request.args.get("page", "1")))
+        try:
+            page = max(1, int(request.args.get("page", "1")))
+        except (TypeError, ValueError):
+            page = 1
         offset = (page - 1) * PER_PAGE
 
-        total = conn.execute(
-            """
-            SELECT COUNT(*)
-            FROM entries
-            WHERE status = 'published'
-            """
-        ).fetchone()[0]
+        location_filter = (
+            request.args.get("location")
+            or request.args.get("region")
+            or ""
+        ).strip()
+        collection_filter = request.args.get("collection", "").strip()
+        kind_filter = (
+            request.args.get("kind")
+            or request.args.get("type")
+            or ""
+        ).strip()
+        tag_filters = request.args.getlist("tag")
+        timeframe_filter = (
+            request.args.get("timeframe")
+            or request.args.get("period")
+            or ""
+        ).strip()
 
         rows = conn.execute(
             """
-            SELECT entry_id, title, stream_name, yaml_header, location, published_utc
+            SELECT entry_id, title, stream_name, yaml_header, tags,
+                   access_level, location, published_utc
             FROM entries
-            WHERE status = 'published'
             ORDER BY published_utc DESC, entry_id DESC
-            LIMIT ? OFFSET ?
-            """,
-            (PER_PAGE, offset),
+            """
         ).fetchall()
 
-        entries = []
+        matching_entries = []
+
         for r in rows:
             d = dict(r)
+            entry_metadata(d)
             d["temporal_profile"] = build_temporal_profile(d)
             d["time_label"] = display_time_label(d)
-            entries.append(d)
+            enrich_location(d)
 
-        min_year, max_year = compute_extents(entries)
+            if not entry_matches_filters(
+                d,
+                location=location_filter,
+                collection=collection_filter,
+                kind=kind_filter,
+                tags=tag_filters,
+                timeframe=timeframe_filter,
+            ):
+                continue
+
+            matching_entries.append(d)
+
+            if location_filter:
+                print(
+                    "[LOCATION]",
+                    d["entry_id"],
+                    repr(d["location_text"]),
+                    "=>",
+                    d["resolved_location"].get("status"),
+                    d.get("location_key"),
+                    d.get("location_label"),
+                )
+
+        total = len(matching_entries)
         total_pages = max(1, (total + PER_PAGE - 1) // PER_PAGE)
+
+        if page > total_pages:
+            page = total_pages
+            offset = (page - 1) * PER_PAGE
+
+        entries = matching_entries[offset:offset + PER_PAGE]
+        min_year, max_year = compute_extents(matching_entries)
 
     finally:
         conn.close()
@@ -364,7 +793,13 @@ def index():
         user_streams=user_streams(current_user()),
         page=page,
         total_pages=total_pages,
-        )
+        total_entries=total,
+        active_location=location_filter,
+        active_collection=collection_filter,
+        active_kind=kind_filter,
+        active_tags=tag_filters,
+        active_timeframe=timeframe_filter,
+    )
 
 
 @app.route("/entry/<entry_id>")
@@ -376,10 +811,10 @@ def entry(entry_id: str):
     try:
         row = conn.execute(
             """
-            SELECT entry_id, title, stream_name, yaml_header,
-                   html
+            SELECT entry_id, title, stream_name, access_level, yaml_header,
+                   html_free, html_members, html_premium
             FROM entries
-            WHERE entry_id = ? AND status = 'published'
+            WHERE entry_id = ? 
             """,
             (entry_id,),
         ).fetchone()
@@ -395,7 +830,7 @@ def entry(entry_id: str):
                 """
                 SELECT entry_id, title
                 FROM entries
-                WHERE entry_id = ? AND status = 'published'
+                WHERE entry_id = ? 
                 """,
                 (linked_id,),
             ).fetchone()
@@ -406,15 +841,21 @@ def entry(entry_id: str):
         conn.close()
 
     html = select_html(row, user_level)
-    if not html:
-        html = f"<h1>{row['title']}</h1><p>No HTML stored.</p>"
 
+    if not html:
+
+        rendered_stories = story_markdown_to_html(entry_id)
+        if len(rendered_stories) == 0:
+            html = f"<h1>{row['title']}</h1><p>No HTML stored.</p>"
+        else:
+            html = next(iter(rendered_stories.values()))
+    
     return render_template(
         "entry.html",
         entry=row,
         rendered_html=html,
         user_level=user_level,
-        required_level="free",
+        required_level=row["access_level"],
         related=related,
     )
 
@@ -449,9 +890,10 @@ def search():
     try:
         rows = conn.execute(
             """
-            SELECT entry_id, title, stream_name, yaml_header            FROM entries
-            WHERE status = 'published'
-              AND title LIKE ?
+            SELECT entry_id, title, stream_name, yaml_header, tags,
+                   access_level, location, published_utc
+            FROM entries
+            WHERE title LIKE ?
             ORDER BY published_utc DESC
             """,
             (f"%{q}%",),
@@ -463,8 +905,9 @@ def search():
             d = dict(r)
             d["temporal_profile"] = build_temporal_profile(d)
             d["time_label"] = display_time_label(d)
+            enrich_location(d)
             entries.append(d)
-
+    
         min_year, max_year = compute_extents(entries)
 
     finally:
@@ -486,23 +929,29 @@ def tag_page(tag):
     user = current_user()
     info = stream_info(user, tag)
 
+    conn = content_db()
     try:
-        conn = content_db()
         rows = conn.execute(
             """
-            SELECT entry_id, title, stream_name, yaml_header
+            SELECT entry_id, title, stream_name, yaml_header, tags,
+                   access_level, location, published_utc
             FROM entries
-            WHERE tags LIKE ?
-            ORDER BY published_utc DESC
-            """,
-            (f"%{tag}%",)
+            ORDER BY published_utc DESC, entry_id DESC
+            """
         ).fetchall()
 
         entries = []
+
         for r in rows:
             d = dict(r)
+            entry_metadata(d)
+
+            if not matches_tag_filter(d, [tag]):
+                continue
+
             d["temporal_profile"] = build_temporal_profile(d)
             d["time_label"] = display_time_label(d)
+            enrich_location(d)
             entries.append(d)
 
         min_year, max_year = compute_extents(entries)
@@ -522,6 +971,7 @@ def tag_page(tag):
         max_year=max_year,
     )
 
+
 @app.route("/login")
 def login():
     return redirect(url_for("index"))
@@ -539,6 +989,55 @@ def account():
     return redirect(url_for("index"))
 
 
+@app.route("/remote-view", methods=["GET", "POST"])
+def remote_view():
+    conversation = session.get("remote_view_conversation", [])
+
+    if request.method == "POST":
+        message = request.form.get("message", "").strip()
+
+        if message:
+            result = generate_remote_view(
+                prompt=message,
+                conversation=conversation,
+                mock=True,
+            )
+
+            answer = result["text"]
+
+            conversation.append({
+                "role": "user",
+                "content": message,
+            })
+
+            conversation.append({
+                "role": "assistant",
+                "content": answer,
+            })
+
+            session["remote_view_conversation"] = conversation
+
+    latest_answer = next(
+        (
+            item["content"]
+            for item in reversed(conversation)
+            if item["role"] == "assistant"
+        ),
+        None,
+    )
+
+    return render_template(
+        "remote_view.html",
+        conversation=conversation,
+        latest_answer=latest_answer,
+    )
+  
+
+@app.post("/remote-view/reset")
+def remote_view_reset():
+    session.pop("remote_view_conversation", None)
+    return redirect(url_for("remote_view"))
+            
 @app.route("/maplinks/<entry_id>")
 def maplinks(entry_id):
     linked_sites = [
@@ -648,6 +1147,107 @@ def stream_info(user, tag):
         "thumbnail": None,
     }
 
+# block-desktop-load-local-entries.py
+
+# block-desktop-load-local-entries.py
+
+import sys
+
+# Use the standard config module to resolve paths
+TOOLS_DIR = Path(__file__).resolve().parents[1] / "tools"
+if str(TOOLS_DIR) not in sys.path:
+    sys.path.insert(0, str(TOOLS_DIR))
+
+from lscms import export_entries_json
+
+LOCAL_ENTRY_LIMIT = 1_000_000
+
+def entry_number(entry_id: str) -> int | None:
+    match = re.fullmatch(r"entry-(\d+)", str(entry_id).strip())
+    if not match:
+        return None
+    return int(match.group(1))
+
+
+def load_local_entries() -> None:
+    print("Loading local CMS entries...")
+
+    rows = export_entries_json()
+
+    conn = content_db()
+
+    try:
+        conn.execute("BEGIN")
+
+        conn.execute(
+            """
+            DELETE FROM entries
+            WHERE entry_id GLOB 'entry-[0-9]*'
+              AND CAST(SUBSTR(entry_id, 7) AS INTEGER) < ?
+            """,
+            (LOCAL_ENTRY_LIMIT,),
+        )
+
+        local_rows = []
+
+        for row in rows:
+            number = entry_number(row.get("entry_id", ""))
+
+            if number is None or number >= LOCAL_ENTRY_LIMIT:
+                continue
+
+            local_rows.append(row)
+
+        conn.executemany(
+            """
+            INSERT INTO entries (
+                entry_id,
+                title,
+                stream_name,
+                tags,
+                access_level,
+                status,
+                location,
+                yaml_header,
+                story_md,
+                created_utc,
+                updated_utc
+            )
+            VALUES (
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            )
+            """,
+            [
+                (
+                    row["entry_id"],
+                    row.get("title", ""),
+                    row.get("stream_name", ""),
+                    yaml.safe_dump(row.get("tags", [])),
+                    row.get("access_level", "free"),
+                    row.get("status", ""),
+                    row.get("location_text", ""),
+                    row.get("yaml_header", ""),
+                    row.get("story_md", ""),
+                    row.get("created_iso", ""),
+                    row.get("last_activity_iso", ""),
+                )
+                for row in local_rows
+            ],
+        )
+
+        conn.commit()
+
+        print(f"Loaded {len(local_rows)} local entries.")
+
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+        
+
+load_local_entries()
+
 
 def run_flask():
     app.run(
@@ -657,41 +1257,9 @@ def run_flask():
         use_reloader=False,
     )
 
-def check_content_db(path: Path) -> str | None:
-    if not path.exists():
-        return f"Database not found at: {path}"
-    try:
-        conn = sqlite3.connect(str(path))
-        conn.execute("SELECT 1 FROM entries LIMIT 1")
-        conn.close()
-        return None
-    except sqlite3.DatabaseError as e:
-        return f"Could not read database at {path}: {e}"
-
 def main():
     threading.Thread(target=run_flask, daemon=True).start()
     time.sleep(1)
-
-    if os.environ.get("HEICHALOT_NO_GUI"):
-        print("HEICHALOT_NO_GUI set — running Flask server only. Press Ctrl+C to stop.")
-        try:
-            while True:
-                time.sleep(3600)
-        except KeyboardInterrupt:
-            pass
-        return
-
-    err = check_content_db(CONTENT_DB)
-    if err:
-        print(err)
-        window = webview.create_window(
-            "Heichalot CMS — Error",
-            f"data:text/html,<html><body style='font-family:sans-serif;padding:40px;background:#1a1a2e;color:#e0e0e0'><h1 style='color:#e94560'>Database Error</h1><p>{err}</p><p>Please run <b>heichalot-update</b> to download content.</p></body></html>",
-            width=800,
-            height=600,
-        )
-        webview.start(gui="qt")
-        return
 
     webview.create_window(
         "Heichalot CMS",
