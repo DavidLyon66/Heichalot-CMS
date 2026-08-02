@@ -11,6 +11,12 @@ from io import StringIO
 import re
 import fnmatch
 import random
+import threading
+import time
+import webview
+import base64
+import sys
+
 
 from flask import (
     Flask,
@@ -26,27 +32,33 @@ from flask import (
 )
 
 from werkzeug.security import check_password_hash, generate_password_hash
-from config import resolve_location, read_config
 
-import sys
+
+TOOLS_DIR = Path(__file__).resolve().parents[1] / "tools"
+if str(TOOLS_DIR) not in sys.path:
+    sys.path.insert(0, str(TOOLS_DIR))
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-TOOLS_DIR = REPO_ROOT / "tools"
-
-sys.path.insert(0, str(REPO_ROOT))
-sys.path.insert(0, str(TOOLS_DIR))
-from renderhtml import story_markdown_to_html
-from remoteviewing import generate_remote_view
-
-import threading
-import time
-import webview
-import base64
-
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 APP_DIR = Path(__file__).resolve().parent
 
-CONTENT_DB = Path(os.environ.get("HEICHALOT_CONTENT_DB", APP_DIR / "data" / "content.db")).expanduser()
+# Use the standard config module to resolve paths
+from config import load_app_config, resolve_location, read_config
+
+try:
+    _cfg, _cfg_path, _paths = load_app_config(setup_if_missing=False)
+    _content_db = _paths.data_dir / "content.db"
+except Exception:
+    from config import platform_data_dir
+    _content_db = platform_data_dir() / "content.db"
+
+from renderhtml import story_markdown_to_html
+from remoteviewing import generate_remote_view
+
+CONTENT_DB = _content_db
+
 IMAGE_DIR = Path(os.environ.get("HEICHALOT_IMAGE_DIR", APP_DIR / "images")).expanduser()
 PDF_DIR = Path(os.environ.get("HEICHALOT_PDF_DIR", APP_DIR / "pdfs")).expanduser()
 
@@ -57,7 +69,6 @@ CMS_UPDATE_DIR = Path(
 
 
 VALID_THEMES = {"light", "dark", "brown", "blue", "spaceship"}
-
 VALID_LANGS = {"en", "he", "ja"}
 
 STREAM_BUTTON_PALETTES = {
@@ -1149,15 +1160,6 @@ def stream_info(user, tag):
 
 # block-desktop-load-local-entries.py
 
-# block-desktop-load-local-entries.py
-
-import sys
-
-# Use the standard config module to resolve paths
-TOOLS_DIR = Path(__file__).resolve().parents[1] / "tools"
-if str(TOOLS_DIR) not in sys.path:
-    sys.path.insert(0, str(TOOLS_DIR))
-
 from lscms import export_entries_json
 
 LOCAL_ENTRY_LIMIT = 1_000_000
@@ -1170,7 +1172,7 @@ def entry_number(entry_id: str) -> int | None:
 
 
 def load_local_entries() -> None:
-    print("Loading local CMS entries...")
+    print("Loading local CMS entries...", CONTENT_DB)
 
     rows = export_entries_json()
 
@@ -1205,8 +1207,8 @@ def load_local_entries() -> None:
                 title,
                 stream_name,
                 tags,
-                access_level,
                 status,
+                access_level,
                 location,
                 yaml_header,
                 story_md,
@@ -1223,8 +1225,8 @@ def load_local_entries() -> None:
                     row.get("title", ""),
                     row.get("stream_name", ""),
                     yaml.safe_dump(row.get("tags", [])),
-                    row.get("access_level", "free"),
                     row.get("status", ""),
+                    row.get("access_level", ""),
                     row.get("location_text", ""),
                     row.get("yaml_header", ""),
                     row.get("story_md", ""),
@@ -1245,7 +1247,9 @@ def load_local_entries() -> None:
     finally:
         conn.close()
         
+from updatecms import ensure_entries_db
 
+ensure_entries_db(CONTENT_DB)
 load_local_entries()
 
 
