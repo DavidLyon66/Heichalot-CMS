@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Image Particle Fly-Through</title>
+  <style>
+    html, body { width:100%; height:100%; margin:0; overflow:hidden; background:#080d10; }
+    #scene { width:100%; height:100%; display:block; }
+    #message {
+      position:fixed; left:14px; bottom:14px; z-index:10;
+      padding:8px 11px; border:1px solid rgba(255,255,255,.22);
+      border-radius:6px; background:rgba(0,0,0,.56); color:#d7e4e8;
+      font:12px/1.3 Arial,sans-serif; pointer-events:none;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="scene"></canvas>
+  <div id="message">Loading 512 × 512 source image…</div>
+
+  <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+  <script>
+  (() => {
+    "use strict";
+
+    const SOURCE_IMAGE = "particle_source_512.png";
+    const SOURCE_WIDTH = 512;
+    const SOURCE_HEIGHT = 512;
+    const SAMPLE_WIDTH = 128;
+    const SAMPLE_HEIGHT = 128;
+    const PARTICLE_COUNT = SAMPLE_WIDTH * SAMPLE_HEIGHT;
+    const IMAGE_WORLD_WIDTH = 18;
+    const IMAGE_WORLD_HEIGHT = 18;
+    const IMAGE_Z = -36;
+    const HOLD_SECONDS = 2.0;
+    const EXPLOSION_SECONDS = 5.5;
+    const RESET_SECONDS = 1.5;
+
+    const canvas = document.getElementById("scene");
+    const message = document.getElementById("message");
+
+    if (!window.THREE) {
+      message.textContent = "ERROR: Three.js did not load.";
+      return;
+    }
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x080d10);
+    scene.fog = new THREE.Fog(0x080d10, 24, 95);
+
+    const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.1, 180);
+    camera.position.set(0, 2.15, 8);
+    camera.lookAt(0, 1.0, -22);
+
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias:true });
+    renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
+    renderer.setSize(innerWidth, innerHeight);
+
+    const gridSize = 180;
+    const gridDivisions = 180;
+    const grid1 = new THREE.GridHelper(gridSize, gridDivisions, 0x46616a, 0x1d3036);
+    const grid2 = new THREE.GridHelper(gridSize, gridDivisions, 0x46616a, 0x1d3036);
+    grid1.position.z = 0;
+    grid2.position.z = -gridSize;
+    scene.add(grid1, grid2);
+
+    const geom = new THREE.BoxGeometry(0.12, 0.12, 0.28);
+    geom.translate(0, 0, -0.14);
+    const mat = new THREE.MeshBasicMaterial({ vertexColors:true });
+    const particles = new THREE.InstancedMesh(geom, mat, PARTICLE_COUNT);
+    particles.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    particles.frustumCulled = false;
+    scene.add(particles);
+
+    const dummy = new THREE.Object3D();
+    const colour = new THREE.Color();
+    const startPositions = new Float32Array(PARTICLE_COUNT * 3);
+    const velocities = new Float32Array(PARTICLE_COUNT * 3);
+    const spins = new Float32Array(PARTICLE_COUNT * 3);
+    const phaseOffsets = new Float32Array(PARTICLE_COUNT);
+
+    let loaded = false;
+    let cycleStart = performance.now() * 0.001;
+
+    function setTransform(index, x, y, z, scale, rx, ry, rz) {
+      dummy.position.set(x, y, z);
+      dummy.scale.setScalar(scale);
+      dummy.rotation.set(rx, ry, rz);
+      dummy.updateMatrix();
+      particles.setMatrixAt(index, dummy.matrix);
+    }
+
+    function prepareParticles(pixelData) {
+      let index = 0;
+
+      for (let row = 0; row < SAMPLE_HEIGHT; row++) {
+        for (let column = 0; column < SAMPLE_WIDTH; column++) {
+          const pixelIndex = (row * SAMPLE_WIDTH + column) * 4;
+          const red = pixelData[pixelIndex] / 255;
+          const green = pixelData[pixelIndex + 1] / 255;
+          const blue = pixelData[pixelIndex + 2] / 255;
+
+          const x = ((column + 0.5) / SAMPLE_WIDTH - 0.5) * IMAGE_WORLD_WIDTH;
+          const y = (0.5 - (row + 0.5) / SAMPLE_HEIGHT) * IMAGE_WORLD_HEIGHT + 2;
+          const z = IMAGE_Z;
+          const base = index * 3;
+
+          startPositions[base] = x;
+          startPositions[base + 1] = y;
+          startPositions[base + 2] = z;
+
+          const radialX = x / (IMAGE_WORLD_WIDTH * 0.5);
+          const radialY = (y - 2) / (IMAGE_WORLD_HEIGHT * 0.5);
+          const angle = Math.random() * Math.PI * 2;
+          const radius = Math.random() * 1.4;
+
+          velocities[base] = radialX * (2.2 + Math.random() * 4.0) + Math.cos(angle) * radius;
+          velocities[base + 1] = radialY * (2.2 + Math.random() * 4.0) + Math.sin(angle) * radius;
+          velocities[base + 2] = 9.5 + Math.random() * 13.0;
+
+          spins[base] = (Math.random() - 0.5) * 5.0;
+          spins[base + 1] = (Math.random() - 0.5) * 5.0;
+          spins[base + 2] = (Math.random() - 0.5) * 5.0;
+          phaseOffsets[index] = Math.random() * 0.7;
+
+          particles.setColorAt(index, colour.setRGB(red, green, blue));
+          setTransform(index, x, y, z, 1, 0, 0, 0);
+          index++;
+        }
+      }
+
+      particles.instanceMatrix.needsUpdate = true;
+      if (particles.instanceColor) particles.instanceColor.needsUpdate = true;
+      loaded = true;
+      cycleStart = performance.now() * 0.001;
+      message.textContent = "Image assembled — click to replay the explosion";
+    }
+
+    function loadSourceImage() {
+      const image = new Image();
+
+      image.onload = () => {
+        if (image.naturalWidth !== SOURCE_WIDTH || image.naturalHeight !== SOURCE_HEIGHT) {
+          message.textContent = `ERROR: expected 512 × 512, got ${image.naturalWidth} × ${image.naturalHeight}`;
+          return;
+        }
+
+        const sampleCanvas = document.createElement("canvas");
+        sampleCanvas.width = SAMPLE_WIDTH;
+        sampleCanvas.height = SAMPLE_HEIGHT;
+        const context = sampleCanvas.getContext("2d", { willReadFrequently:true });
+        context.drawImage(image, 0, 0, SOURCE_WIDTH, SOURCE_HEIGHT, 0, 0, SAMPLE_WIDTH, SAMPLE_HEIGHT);
+        const imageData = context.getImageData(0, 0, SAMPLE_WIDTH, SAMPLE_HEIGHT);
+        prepareParticles(imageData.data);
+      };
+
+      image.onerror = () => {
+        message.textContent = "ERROR: particle_source_512.png could not be loaded.";
+      };
+
+      image.src = SOURCE_IMAGE;
+    }
+
+    function smoothStep(value) {
+      const t = Math.max(0, Math.min(1, value));
+      return t * t * (3 - 2 * t);
+    }
+
+    function animateParticles(now) {
+      if (!loaded) return;
+
+      const total = HOLD_SECONDS + EXPLOSION_SECONDS + RESET_SECONDS;
+      const elapsed = (now - cycleStart) % total;
+      const explosion = elapsed >= HOLD_SECONDS ? (elapsed - HOLD_SECONDS) / EXPLOSION_SECONDS : 0;
+      const reset = elapsed >= HOLD_SECONDS + EXPLOSION_SECONDS
+        ? (elapsed - HOLD_SECONDS - EXPLOSION_SECONDS) / RESET_SECONDS
+        : 0;
+
+      const easedExplosion = smoothStep(explosion);
+      const easedReset = smoothStep(reset);
+
+      for (let index = 0; index < PARTICLE_COUNT; index++) {
+        const base = index * 3;
+        const x0 = startPositions[base];
+        const y0 = startPositions[base + 1];
+        const z0 = startPositions[base + 2];
+        const delay = phaseOffsets[index];
+        const localExplosion = smoothStep((easedExplosion - delay * 0.22) / (1 - delay * 0.22));
+        const travelTime = localExplosion * EXPLOSION_SECONDS;
+
+        let x = x0 + velocities[base] * travelTime;
+        let y = y0 + velocities[base + 1] * travelTime;
+        let z = z0 + velocities[base + 2] * travelTime;
+
+        if (reset > 0) {
+          x = THREE.MathUtils.lerp(x, x0, easedReset);
+          y = THREE.MathUtils.lerp(y, y0, easedReset);
+          z = THREE.MathUtils.lerp(z, z0, easedReset);
+        }
+
+        setTransform(
+          index,
+          x, y, z,
+          THREE.MathUtils.lerp(1, 0.72, localExplosion),
+          spins[base] * travelTime,
+          spins[base + 1] * travelTime,
+          spins[base + 2] * travelTime
+        );
+      }
+
+      particles.instanceMatrix.needsUpdate = true;
+    }
+
+    const clock = new THREE.Clock();
+
+    function animate() {
+      requestAnimationFrame(animate);
+
+      const delta = Math.min(clock.getDelta(), 0.05);
+      const movement = 0.65 * delta;
+      grid1.position.z += movement;
+      grid2.position.z += movement;
+
+      if (grid1.position.z >= gridSize) grid1.position.z -= gridSize * 2;
+      if (grid2.position.z >= gridSize) grid2.position.z -= gridSize * 2;
+
+      const now = performance.now() * 0.001;
+      camera.position.x = Math.sin(now * 0.17) * 0.08;
+      camera.position.y = 2.15 + Math.sin(now * 0.31) * 0.018;
+      camera.lookAt(0, 1.0, -22);
+
+      animateParticles(now);
+      renderer.render(scene, camera);
+    }
+
+    function resize() {
+      camera.aspect = innerWidth / innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight);
+    }
+
+    addEventListener("resize", resize);
+    addEventListener("click", () => { cycleStart = performance.now() * 0.001; });
+
+    resize();
+    loadSourceImage();
+    animate();
+  })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Remote View Three.js Test Scene</title>
+
+  <style>
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: #0d1214;
+      font-family: Arial, sans-serif;
+    }
+
+    #scene {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    #status {
+      position: fixed;
+      left: 12px;
+      bottom: 12px;
+      z-index: 10;
+      padding: 8px 10px;
+      border: 1px solid rgba(255,255,255,0.24);
+      border-radius: 6px;
+      background: rgba(0,0,0,0.58);
+      color: #dbe7ea;
+      font-size: 12px;
+    }
+  </style>
+</head>
+
+<body>
+  <canvas id="scene"></canvas>
+  <div id="status">Starting Three.js scene…</div>
+
+  <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+
+  <script>
+    (function () {
+      const status = document.getElementById("status");
+      const canvas = document.getElementById("scene");
+
+      if (!window.THREE) {
+        status.textContent = "ERROR: Three.js did not load.";
+        status.style.color = "#ff8a8a";
+        console.error("Three.js did not load.");
+        return;
+      }
+
+      console.log("Three.js loaded:", THREE.REVISION);
+
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x0d1214);
+
+      const camera = new THREE.PerspectiveCamera(
+        50,
+        window.innerWidth / window.innerHeight,
+        0.1,
+        100
+      );
+      camera.position.set(8, 7, 10);
+      camera.lookAt(0, 0.7, 0);
+
+      const renderer = new THREE.WebGLRenderer({
+        canvas,
+        antialias: true
+      });
+
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.shadowMap.enabled = true;
+
+      const ambientLight = new THREE.AmbientLight(0xb9d6dc, 1.2);
+      scene.add(ambientLight);
+
+      const sun = new THREE.DirectionalLight(0xffffff, 2.2);
+      sun.position.set(5, 10, 7);
+      sun.castShadow = true;
+      scene.add(sun);
+
+      const groundGeometry = new THREE.PlaneGeometry(30, 30);
+      const groundMaterial = new THREE.MeshStandardMaterial({
+        color: 0x263338,
+        roughness: 0.95,
+        metalness: 0.0
+      });
+
+      const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+      ground.rotation.x = -Math.PI / 2;
+      ground.receiveShadow = true;
+      scene.add(ground);
+
+      const islandShape = new THREE.Shape();
+      islandShape.moveTo(-2.8, -1.0);
+      islandShape.lineTo(-1.7, -2.2);
+      islandShape.lineTo(0.0, -2.5);
+      islandShape.lineTo(2.1, -1.7);
+      islandShape.lineTo(2.8, -0.1);
+      islandShape.lineTo(2.0, 1.7);
+      islandShape.lineTo(0.4, 2.3);
+      islandShape.lineTo(-1.5, 1.8);
+      islandShape.lineTo(-2.7, 0.6);
+      islandShape.closePath();
+
+      const islandGeometry = new THREE.ExtrudeGeometry(islandShape, {
+        depth: 0.8,
+        bevelEnabled: true,
+        bevelThickness: 0.12,
+        bevelSize: 0.12,
+        bevelSegments: 2
+      });
+
+      islandGeometry.rotateX(-Math.PI / 2);
+      islandGeometry.center();
+
+      const islandMaterial = new THREE.MeshStandardMaterial({
+        color: 0x718064,
+        roughness: 0.82,
+        metalness: 0.05
+      });
+
+      const island = new THREE.Mesh(islandGeometry, islandMaterial);
+      island.position.y = 0.5;
+      island.castShadow = true;
+      island.receiveShadow = true;
+      scene.add(island);
+
+      const markerGeometry = new THREE.CylinderGeometry(0.22, 0.38, 1.7, 8);
+      const markerMaterial = new THREE.MeshStandardMaterial({
+        color: 0x9aaeb4,
+        roughness: 0.5
+      });
+
+      const marker = new THREE.Mesh(markerGeometry, markerMaterial);
+      marker.position.set(0, 1.75, 0);
+      marker.castShadow = true;
+      scene.add(marker);
+
+      const grid = new THREE.GridHelper(30, 30, 0x405158, 0x263338);
+      grid.position.y = 0.01;
+      scene.add(grid);
+
+      function resize() {
+        const width = window.innerWidth;
+        const height = window.innerHeight;
+
+        camera.aspect = width / height;
+        camera.updateProjectionMatrix();
+        renderer.setSize(width, height);
+      }
+
+      function animate() {
+        requestAnimationFrame(animate);
+
+        island.rotation.y += 0.0025;
+        marker.rotation.y -= 0.006;
+
+        renderer.render(scene, camera);
+      }
+
+      window.addEventListener("resize", resize);
+      resize();
+      animate();
+
+      status.textContent = "Three.js scene running — ground plane + extruded island";
+      console.log("Remote-view test scene running.");
+    })();
+  </script>
+</body>
+</html>

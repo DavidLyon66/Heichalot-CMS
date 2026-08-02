@@ -1,0 +1,481 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Remote View Scene</title>
+  <style>
+    html, body { width:100%; height:100%; margin:0; overflow:hidden; background:#0d1214; font-family:system-ui,sans-serif; }
+    #scene { width:100%; height:100%; display:block; }
+    #fade-layer { position:fixed; inset:0; background:#000; opacity:0; pointer-events:none; transition:opacity 800ms ease; z-index:20; }
+    #report-layer { position:fixed; inset:5%; display:none; overflow-y:auto; box-sizing:border-box; padding:2rem 3rem; background:rgba(10,15,18,.92); color:#e8f0f2; border:1px solid rgba(160,190,200,.28); border-radius:14px; box-shadow:0 20px 70px rgba(0,0,0,.45); z-index:10; }
+    #report-layer.visible { display:block; }
+    #report-content { max-width:900px; margin:0 auto; white-space:pre-wrap; line-height:1.7; }
+  </style>
+</head>
+<body>
+  <canvas id="scene"></canvas>
+  <div id="report-layer"><div id="report-content"></div></div>
+  <div id="fade-layer"></div>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+  <script>
+    (function () {
+      const canvas = document.getElementById("scene");
+      const fadeLayer = document.getElementById("fade-layer");
+      const reportLayer = document.getElementById("report-layer");
+      const reportContent = document.getElementById("report-content");
+
+      if (!window.THREE) {
+        console.error("Three.js did not load.");
+        return;
+      }
+
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x0d1214);
+      scene.fog = new THREE.Fog(0x0d1214, 18, 90);
+
+      const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 120);
+      const initialCameraPosition = new THREE.Vector3(0, 2.2, 7);
+      camera.position.copy(initialCameraPosition);
+      camera.lookAt(0, 1.0, -18);
+
+      const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      renderer.setSize(window.innerWidth, window.innerHeight);
+
+      const gridSize = 200;
+      const gridDivisions = 200;
+      const grid1 = new THREE.GridHelper(gridSize, gridDivisions, 0x56666c, 0x2b373b);
+      const grid2 = new THREE.GridHelper(gridSize, gridDivisions, 0x56666c, 0x2b373b);
+      const initialGrid1Z = 0;
+      const initialGrid2Z = -gridSize;
+      grid1.position.z = initialGrid1Z;
+      grid2.position.z = initialGrid2Z;
+      scene.add(grid1);
+      scene.add(grid2);
+
+      let heroMesh = null;
+      let heroTexture = null;
+      const clock = new THREE.Clock();
+      let movementEnabled = false;
+      let walkingSpeed = 0.75;
+      let transitionActive = false;
+      let transitionStartedAt = 0;
+      let transitionDuration = 2500;
+      let transitionStartZ = -32;
+      let transitionEndZ = -15;
+
+      // Observer journey control:
+      //   0   = starting position
+      //   100 = at / entering the image
+      //   150 = through and beyond the image
+      let advancePosition = 0;
+      let targetAdvancePosition = 0;
+
+      // Particle field control, expressed as 0-100%.
+      let particleFieldIntensity = 0;
+      let targetParticleFieldIntensity = 0;
+      const maxParticleCount = 1800;
+      const particlePositions = new Float32Array(maxParticleCount * 3);
+      const particleSpeeds = new Float32Array(maxParticleCount);
+
+      for (let i = 0; i < maxParticleCount; i += 1) {
+        const offset = i * 3;
+        particlePositions[offset] = (Math.random() - 0.5) * 34;
+        particlePositions[offset + 1] = Math.random() * 15 - 3;
+        particlePositions[offset + 2] = -Math.random() * 95 - 5;
+        particleSpeeds[i] = 0.45 + Math.random() * 1.8;
+      }
+
+      const particleGeometry = new THREE.BufferGeometry();
+      particleGeometry.setAttribute(
+        "position",
+        new THREE.BufferAttribute(particlePositions, 3)
+      );
+      particleGeometry.setDrawRange(0, 0);
+
+      const particleMaterial = new THREE.PointsMaterial({
+        color: 0xb9d8df,
+        size: 0.13,
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending
+      });
+
+      const particleField = new THREE.Points(
+        particleGeometry,
+        particleMaterial
+      );
+      particleField.visible = false;
+      scene.add(particleField);
+
+      function resize() {
+        const width = window.innerWidth;
+        const height = window.innerHeight;
+        camera.aspect = width / height;
+        camera.updateProjectionMatrix();
+        renderer.setSize(width, height);
+      }
+
+      function resetScene() {
+        movementEnabled = false;
+        walkingSpeed = 0.75;
+        grid1.position.z = initialGrid1Z;
+        grid2.position.z = initialGrid2Z;
+        camera.position.copy(initialCameraPosition);
+        camera.lookAt(0, 1.0, -18);
+        transitionActive = false;
+        transitionStartedAt = 0;
+
+        advancePosition = 0;
+        targetAdvancePosition = 0;
+
+        particleFieldIntensity = 0;
+        targetParticleFieldIntensity = 0;
+        particleField.visible = false;
+        particleMaterial.opacity = 0;
+        particleGeometry.setDrawRange(0, 0);
+
+        reportLayer.classList.remove("visible");
+        reportContent.textContent = "";
+        fadeLayer.style.opacity = "0";
+
+        if (heroMesh) {
+          scene.remove(heroMesh);
+          heroMesh.geometry.dispose();
+          heroMesh.material.dispose();
+          heroMesh = null;
+        }
+        if (heroTexture) {
+          heroTexture.dispose();
+          heroTexture = null;
+        }
+      }
+
+      function loadImage(url) {
+        if (!url) {
+          console.warn("LOAD_IMAGE requires an image URL.");
+          return;
+        }
+
+        new THREE.TextureLoader().load(
+          url,
+          function (texture) {
+            if (heroMesh) {
+              scene.remove(heroMesh);
+              heroMesh.geometry.dispose();
+              heroMesh.material.dispose();
+            }
+            if (heroTexture) heroTexture.dispose();
+
+            heroTexture = texture;
+            const image = texture.image;
+            const aspect = image && image.width && image.height ? image.width / image.height : 16 / 9;
+            const height = 8;
+            const width = height * aspect;
+            heroMesh = new THREE.Mesh(
+              new THREE.PlaneGeometry(width, height),
+              new THREE.MeshBasicMaterial({ map: texture, transparent: true, opacity: 1 })
+            );
+            heroMesh.position.set(0, 3.5, transitionStartZ);
+            scene.add(heroMesh);
+          },
+          undefined,
+          function (error) { console.error("Could not load image:", error); }
+        );
+      }
+
+      function beginTransition(options) {
+        const config = typeof options === "object" && options !== null ? options : {};
+        transitionDuration = Number(config.duration) || 2500;
+        transitionStartZ = Number.isFinite(Number(config.startZ)) ? Number(config.startZ) : -32;
+        transitionEndZ = Number.isFinite(Number(config.endZ)) ? Number(config.endZ) : -15;
+        transitionStartedAt = performance.now();
+        transitionActive = true;
+        if (heroMesh) heroMesh.position.z = transitionStartZ;
+      }
+
+      function setAdvance(value) {
+        const numeric = Number(value);
+
+        if (!Number.isFinite(numeric)) {
+          console.warn("ADVANCE requires a number from 0 to 150.");
+          return;
+        }
+
+        targetAdvancePosition = Math.max(0, Math.min(150, numeric));
+      }
+
+      function setParticleFieldIntensity(value) {
+        const numeric = Number(value);
+
+        if (!Number.isFinite(numeric)) {
+          console.warn(
+            "PTCL_FIELD_INTENSITY requires a number from 0 to 100."
+          );
+          return;
+        }
+
+        targetParticleFieldIntensity = Math.max(
+          0,
+          Math.min(100, numeric)
+        );
+      }
+
+      function updateAdvanceScene() {
+        if (!heroMesh) return;
+
+        if (advancePosition <= 100) {
+          const progress = advancePosition / 100;
+          const eased = 1 - Math.pow(1 - progress, 3);
+
+          heroMesh.position.z = THREE.MathUtils.lerp(
+            transitionStartZ,
+            -4,
+            eased
+          );
+          heroMesh.material.opacity = THREE.MathUtils.lerp(
+            0.3,
+            1,
+            eased
+          );
+          heroMesh.scale.setScalar(
+            THREE.MathUtils.lerp(0.55, 1, eased)
+          );
+        } else {
+          const exitProgress = (advancePosition - 100) / 50;
+          const eased = exitProgress * exitProgress;
+
+          heroMesh.position.z = THREE.MathUtils.lerp(
+            -4,
+            18,
+            eased
+          );
+          heroMesh.material.opacity = THREE.MathUtils.lerp(
+            1,
+            0,
+            exitProgress
+          );
+          heroMesh.scale.setScalar(
+            THREE.MathUtils.lerp(1, 1.7, eased)
+          );
+        }
+      }
+
+      function updateParticleField(delta) {
+        particleFieldIntensity +=
+          (targetParticleFieldIntensity - particleFieldIntensity) *
+          Math.min(1, delta * 2.5);
+
+        const strength = particleFieldIntensity / 100;
+        const activeCount = Math.round(maxParticleCount * strength);
+
+        particleField.visible = activeCount > 0;
+        particleGeometry.setDrawRange(0, activeCount);
+        particleMaterial.opacity = Math.min(0.95, strength * 1.15);
+        particleMaterial.size = 0.07 + strength * 0.18;
+
+        if (!particleField.visible) return;
+
+        const positions = particleGeometry.attributes.position.array;
+        const baseSpeed = 6 + strength * 42;
+
+        for (let i = 0; i < activeCount; i += 1) {
+          const offset = i * 3;
+          positions[offset + 2] +=
+            baseSpeed * particleSpeeds[i] * delta;
+
+          if (positions[offset + 2] > 8) {
+            positions[offset] = (Math.random() - 0.5) * 34;
+            positions[offset + 1] = Math.random() * 15 - 3;
+            positions[offset + 2] = -95 - Math.random() * 25;
+          }
+        }
+
+        particleGeometry.attributes.position.needsUpdate = true;
+      }
+
+      function showReport(value) {
+        if (typeof value === "string") reportContent.textContent = value;
+        else if (value && typeof value === "object") reportContent.textContent = value.text || value.content || "";
+        reportLayer.classList.add("visible");
+      }
+
+      function hideReport() {
+        reportLayer.classList.remove("visible");
+      }
+
+      function fadeToBlack(value) {
+        let opacity = 1;
+        let duration = 800;
+        if (typeof value === "number") opacity = Math.max(0, Math.min(1, value));
+        else if (value && typeof value === "object") {
+          if (value.opacity !== undefined) opacity = Math.max(0, Math.min(1, Number(value.opacity)));
+          if (value.duration !== undefined) duration = Math.max(0, Number(value.duration));
+        }
+        fadeLayer.style.transition = `opacity ${duration}ms ease`;
+        fadeLayer.style.opacity = String(opacity);
+      }
+
+
+      /*
+        Instructions for use
+        
+		RemoteViewScene.command(
+			"LOAD_IMAGE",
+			"/static/particle_source_512.png"
+		);
+
+		RemoteViewScene.command("ADVANCE", 0);
+		RemoteViewScene.command("ADVANCE", 50);
+		RemoteViewScene.command("ADVANCE", 100);
+		RemoteViewScene.command("ADVANCE", 150);
+
+		Particle field:
+
+		RemoteViewScene.command("PTCL_FIELD_INTENSITY", 20);
+		RemoteViewScene.command("PTCL_FIELD_INTENSITY", 60);
+		RemoteViewScene.command("PTCL_FIELD_INTENSITY", 100);
+		RemoteViewScene.command("PTCL_FIELD_INTENSITY", 0);
+
+		Combined test:
+
+		RemoteViewScene.command("LOAD_IMAGE", "/static/particle_source_512.png");
+		RemoteViewScene.command("START");
+		RemoteViewScene.command("PTCL_FIELD_INTENSITY", 75);
+		RemoteViewScene.command("ADVANCE", 100);
+	  */
+
+      function handleCommand(cmd, value) {
+        const command = String(cmd || "").trim().toUpperCase();
+        switch (command) {
+          case "START":
+          case "START_MOVEMENT":
+            movementEnabled = true;
+            break;
+          case "STOP":
+          case "STOP_MOVEMENT":
+            movementEnabled = false;
+            break;
+          case "SET_SPEED": {
+            const speed = Number(value);
+            if (!Number.isFinite(speed) || speed < 0) {
+              console.warn("SET_SPEED requires a non-negative number.");
+              return;
+            }
+            walkingSpeed = speed;
+            break;
+          }
+          case "LOAD_IMAGE":
+            loadImage(value);
+            break;
+          case "BEGIN_TRANSITION":
+            beginTransition(value);
+            break;
+          case "ADVANCE":
+            setAdvance(value);
+            break;
+          case "PTCL_FIELD_INTENSITY":
+            setParticleFieldIntensity(value);
+            break;
+          case "SHOW_REPORT":
+            showReport(value);
+            break;
+          case "HIDE_REPORT":
+            hideReport();
+            break;
+          case "FADE_TO_BLACK":
+            fadeToBlack(value);
+            break;
+          case "RESET":
+            resetScene();
+            break;
+          default:
+            console.warn("Unknown RemoteViewScene command:", cmd);
+        }
+      }
+
+      window.RemoteViewScene = {
+        command: handleCommand,
+        startMovement() { handleCommand("START"); },
+        stopMovement() { handleCommand("STOP"); },
+        setSpeed(speed) { handleCommand("SET_SPEED", speed); },
+        loadImage(url) { handleCommand("LOAD_IMAGE", url); },
+        beginTransition(options) { handleCommand("BEGIN_TRANSITION", options); },
+        advance(value) { handleCommand("ADVANCE", value); },
+        setParticleFieldIntensity(value) {
+          handleCommand("PTCL_FIELD_INTENSITY", value);
+        },
+        showReport(content) { handleCommand("SHOW_REPORT", content); },
+        hideReport() { handleCommand("HIDE_REPORT"); },
+        fadeToBlack(options) { handleCommand("FADE_TO_BLACK", options); },
+        reset() { handleCommand("RESET"); },
+        getState() {
+          return {
+            movementEnabled,
+            walkingSpeed,
+            transitionActive,
+            advancePosition,
+            targetAdvancePosition,
+            particleFieldIntensity,
+            targetParticleFieldIntensity,
+            reportVisible: reportLayer.classList.contains("visible"),
+            fadedToBlack: Number(fadeLayer.style.opacity || 0) > 0
+          };
+        }
+      };
+
+      window.addEventListener("message", function (event) {
+        const data = event.data;
+        if (!data || data.type !== "remote-view-scene-command") return;
+        handleCommand(data.command, data.value);
+      });
+
+      function animate() {
+        requestAnimationFrame(animate);
+        const delta = Math.min(clock.getDelta(), 0.05);
+
+        advancePosition +=
+          (targetAdvancePosition - advancePosition) *
+          Math.min(1, delta * 1.8);
+
+        updateAdvanceScene();
+        updateParticleField(delta);
+
+        if (movementEnabled) {
+          const movement = walkingSpeed * delta;
+          grid1.position.z += movement;
+          grid2.position.z += movement;
+          if (grid1.position.z >= gridSize) grid1.position.z -= gridSize * 2;
+          if (grid2.position.z >= gridSize) grid2.position.z -= gridSize * 2;
+        }
+
+        const time = performance.now() * 0.001;
+        if (movementEnabled) {
+          camera.position.x = Math.sin(time * 0.22) * 0.12;
+          camera.position.y = 2.2 + Math.sin(time * 0.45) * 0.025;
+        } else {
+          camera.position.x = initialCameraPosition.x;
+          camera.position.y = initialCameraPosition.y;
+        }
+
+        if (transitionActive && heroMesh) {
+          const elapsed = performance.now() - transitionStartedAt;
+          const progress = Math.min(elapsed / transitionDuration, 1);
+          const eased = 1 - Math.pow(1 - progress, 3);
+          heroMesh.position.z = transitionStartZ + (transitionEndZ - transitionStartZ) * eased;
+          if (progress >= 1) transitionActive = false;
+        }
+
+        camera.lookAt(0, 1.0, -18);
+        renderer.render(scene, camera);
+      }
+
+      window.addEventListener("resize", resize);
+      resize();
+      animate();
+    })();
+  </script>
+</body>
+</html>
