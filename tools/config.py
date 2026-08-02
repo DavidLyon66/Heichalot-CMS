@@ -66,11 +66,6 @@ def _find_location_file() -> Path:
 
 LOCATION_FILE = _find_location_file()
 
-
-def _location_debug(message: str) -> None:
-    if os.environ.get("HEICHALOT_LOCATION_DEBUG"):
-        print(f"[location-debug/config] {message}", file=sys.stderr)
-
 @dataclass(frozen=True)
 class HeichalotPaths:
     config_path: Path
@@ -116,6 +111,11 @@ def platform_data_dir() -> Path:
     return Path.home() / ".local" / "share" / APP_SLUG
 
 def default_config_path() -> Path:
+    override = os.environ.get("HEICHALOT_CONFIG", "").strip()
+
+    if override:
+        return Path(override).expanduser().resolve()
+
     return platform_config_dir() / CONFIG_FILENAME
 
 def default_user_cms_dir() -> Path:
@@ -1504,7 +1504,20 @@ def load_location_catalogue() -> dict[str, Any]:
 
     return catalogue
 
+def _location_debug(message: str) -> None:
+    """Write location diagnostics when explicitly enabled."""
 
+    enabled = os.environ.get(
+        "HEICHALOT_LOCATION_DEBUG",
+        "",
+    ).strip().lower()
+
+    if enabled in {"1", "true", "yes", "on"}:
+        print(
+            f"[location-debug/config] {message}",
+            file=sys.stderr,
+        )
+        
 def main() -> int:
     import argparse
 

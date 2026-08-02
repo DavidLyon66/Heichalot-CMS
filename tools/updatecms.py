@@ -150,6 +150,7 @@ def ensure_entries_db(db_path: Path) -> None:
                 tags TEXT,
                 status TEXT NOT NULL CHECK (status IN ('draft', 'published', 'archived')),
                 location TEXT,
+                access_level TEXT,
                 yaml_header TEXT,
                 story_md TEXT NOT NULL,
                 assets TEXT,
