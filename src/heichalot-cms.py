@@ -823,7 +823,7 @@ def entry(entry_id: str):
         row = conn.execute(
             """
             SELECT entry_id, title, stream_name, access_level, yaml_header,
-                   html_free, html_members, html_premium
+                   html
             FROM entries
             WHERE entry_id = ? 
             """,
@@ -851,7 +851,7 @@ def entry(entry_id: str):
     finally:
         conn.close()
 
-    html = select_html(row, user_level)
+    html = row["html"]
 
     if not html:
 
