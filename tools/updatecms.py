@@ -421,12 +421,12 @@ def select_required_downloads(
 
 def is_flush_allowed(cfg) -> bool:
     if not cfg.has_section("updatecms"):
-        return False
+        return True
 
     return cfg.getboolean(
         "updatecms",
         "flush_allowed",
-        fallback=False,
+        fallback=True,
     )
 
 def install_release(entry_dirs: list[Path], cms_dir: Path) -> None:
