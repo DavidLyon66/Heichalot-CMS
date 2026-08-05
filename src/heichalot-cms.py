@@ -34,6 +34,7 @@ from flask import (
 from werkzeug.security import check_password_hash, generate_password_hash
 
 
+import sys
 TOOLS_DIR = Path(__file__).resolve().parents[1] / "tools"
 if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
@@ -45,7 +46,8 @@ if str(REPO_ROOT) not in sys.path:
 APP_DIR = Path(__file__).resolve().parent
 
 # Use the standard config module to resolve paths
-from config import load_app_config, resolve_location, read_config
+from config import (load_app_config, resolve_location, read_config, 
+                    default_config_path)
 
 try:
     _cfg, _cfg_path, _paths = load_app_config(setup_if_missing=False)
@@ -55,7 +57,13 @@ except Exception:
     _content_db = platform_data_dir() / "content.db"
 
 from renderhtml import story_markdown_to_html
-from remoteviewing import generate_remote_view
+
+from remoteviewing import (
+     generate_remote_view, 
+     save_working_session_to_cms,
+     load_working_session, 
+     append_working_session, 
+     clear_working_session)
 
 CONTENT_DB = _content_db
 
@@ -982,6 +990,15 @@ def tag_page(tag):
         max_year=max_year,
     )
 
+@app.errorhandler(500)
+def internal_server_error(error):
+    app.logger.error(
+        "Internal server error: %s",
+        error,
+        exc_info=True,
+    )
+
+    return render_template("500.html"), 500
 
 @app.route("/login")
 def login():
@@ -1000,55 +1017,168 @@ def account():
     return redirect(url_for("index"))
 
 
+def make_remote_view_status(
+    text: str,
+    level: str = "outline",
+) -> dict[str, str]:
+    allowed_levels = {
+        "primary",
+        "secondary",
+        "accent",
+        "info",
+        "success",
+        "warning",
+        "error",
+        "neutral",
+        "ghost",
+        "outline",
+    }
+
+    level = str(level).strip().lower()
+
+    if level not in allowed_levels:
+        level = "outline"
+
+    return {
+        "text": str(text).strip() or "System status unavailable",
+        "level": level,
+    }
+    
 @app.route("/remote-view", methods=["GET", "POST"])
 def remote_view():
-    conversation = session.get("remote_view_conversation", [])
+
+    backend = get_remote_view_backend()
+    conversation = load_working_session()
+    
+    print(f"[REMOTE VIEW] backend={backend!r}")
 
     if request.method == "POST":
         message = request.form.get("message", "").strip()
+
+        if backend != "mock":
+            backend = "ollama"
 
         if message:
             result = generate_remote_view(
                 prompt=message,
                 conversation=conversation,
-                mock=True,
+                api=backend,
             )
 
             answer = result["text"]
 
-            conversation.append({
-                "role": "user",
-                "content": message,
-            })
+            append_working_session(
+                role="Narrator",
+                content=message,
+            )
 
-            conversation.append({
-                "role": "assistant",
-                "content": answer,
-            })
-
-            session["remote_view_conversation"] = conversation
+            append_working_session(
+                role="Ai",
+                content=answer,
+            )
+            
+            conversation = load_working_session()            
 
     latest_answer = next(
         (
             item["content"]
             for item in reversed(conversation)
-            if item["role"] == "assistant"
+            if str(item.get("role", "")).casefold() == "ai"
         ),
         None,
     )
 
+    status = make_remote_view_status(
+        text="System: Demo",
+        level="warning",
+    )
+
+    if backend == "ollama":
+        status = {
+            "text": "Ollama Live",
+            "level": "success",
+        }
+    else:
+        status = {
+            "text": "System: Demo",
+            "level": "warning",
+        }
+    
     return render_template(
         "remote_view.html",
         conversation=conversation,
         latest_answer=latest_answer,
+        remote_view_status=status,
+        remote_view_backend=backend,
+        remote_view_models=["aja-focus"],
     )
-  
+ 
+@app.route("/remote-view/backend", methods=["POST"])
+def remote_view_backend():
+    selected = request.form.get("backend", "mock").strip().casefold()
+
+    if selected not in {"mock", "ollama"}:
+        abort(400)
+
+    cfg, config_path, _paths = load_app_config(
+        default_config_path(),
+        setup_if_missing=True,
+    )
+
+    if not cfg.has_section("remoteviewing"):
+        cfg.add_section("remoteviewing")
+
+    cfg.set("remoteviewing", "api", selected)
+
+    with config_path.open("w", encoding="utf-8") as handle:
+        cfg.write(handle)
+
+    return redirect(url_for("remote_view"))
+    
+def get_remote_view_backend() -> str:
+    cfg, _config_path, _paths = load_app_config(
+        default_config_path(),
+        setup_if_missing=True,
+    )
+
+    backend = cfg.get(
+        "remoteviewing",
+        "api",
+        fallback="mock",
+    ).strip().casefold()
+
+    return backend if backend in {"mock", "ollama"} else "mock"
 
 @app.post("/remote-view/reset")
 def remote_view_reset():
-    session.pop("remote_view_conversation", None)
+    clear_working_session()
     return redirect(url_for("remote_view"))
-            
+    
+@app.post("/remote-view/finish/save")
+def remote_view_finish_save():
+    title = request.form.get(
+        "title",
+        "Remote-Viewing Session",
+    ).strip()
+
+    entry_id, _story_path = save_working_session_to_cms(
+        fields={
+            "title": title or "Remote-Viewing Session",
+        },
+    )
+
+    return redirect(
+        url_for(
+            "entry",
+            entry_id=entry_id,
+        )
+    )
+    
+@app.post("/remote-view/finish/discard")
+def remote_view_finish_discard():
+    clear_working_session()
+    return redirect(url_for("remote_view"))
+               
 @app.route("/maplinks/<entry_id>")
 def maplinks(entry_id):
     linked_sites = [
