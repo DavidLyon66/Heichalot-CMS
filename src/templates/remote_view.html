@@ -48,9 +48,16 @@
         </h1>
       </div>
 
-      <span class="badge badge-outline">
-        {% if latest_answer %}Report ready{% else %}Ready{% endif %}
-      </span>
+      <button
+        type="button"
+        id="remote-view-status"
+        class="badge badge-{{ remote_view_status.level }} cursor-pointer"
+        onclick="remote_view_backend_dialog.showModal()"
+        title="Change remote-viewing system"
+      >
+        {{ remote_view_status.text }}
+      </button>
+      
     </header>
 
     <section
@@ -192,7 +199,7 @@
 
       {% for message in conversation %}
 
-        {% if message.role == "user" %}
+        {% if message.role|lower == "narrator" %}
 
           <div class="chat chat-end">
             <div class="chat-header text-xs opacity-60">
@@ -228,10 +235,12 @@
 
       <form
         method="post"
+        id="remote-view-form"
         action="{{ url_for('remote_view') }}">
 
         <textarea
           name="message"
+          id="remote-view-message"
           class="textarea textarea-bordered w-full"
           rows="4"
           placeholder="Enter a target, question or remote-viewing request..."
@@ -244,6 +253,7 @@
           </span>
 
           <button
+            id="remote-view-send"
             type="submit"
             class="btn btn-primary">
             Send
@@ -258,6 +268,142 @@
   </aside>
 
 </div>
+
+<dialog id="remote_view_backend_dialog" class="modal">
+  <div class="modal-box">
+
+    <h3 class="text-lg font-bold">
+      Remote-viewing system
+    </h3>
+
+    <p class="mt-2 text-sm opacity-65">
+      Select the system used for remote-viewing requests.
+    </p>
+
+    <form
+      method="post"
+      action="{{ url_for('remote_view_backend') }}"
+      class="mt-6"
+    >
+
+      <label class="flex cursor-pointer items-center gap-3 rounded-lg p-3 hover:bg-base-200">
+        <input
+          type="radio"
+          name="backend"
+          value="mock"
+          class="radio radio-primary"
+          {% if remote_view_backend == "mock" %}checked{% endif %}
+        >
+
+        <div>
+          <div class="font-medium">Heichalot RV (Demo)</div>
+          <div class="text-xs opacity-55">
+            Built-in demonstration responder
+          </div>
+        </div>
+      </label>
+
+      <label class="mt-2 flex cursor-pointer items-center gap-3 rounded-lg p-3 hover:bg-base-200">
+        <input
+          type="radio"
+          name="backend"
+          value="ollama"
+          class="radio radio-primary"
+          {% if remote_view_backend == "ollama" %}checked{% endif %}
+        >
+
+        <div>
+          <div class="font-medium">Heichalot RV</div>
+          <div class="text-xs opacity-55">
+            Live Ai remote-viewing engine.
+          </div>
+        </div>
+      </label>
+
+      <div class="modal-action">
+
+        <button
+          type="button"
+          class="btn btn-ghost"
+          onclick="remote_view_backend_dialog.close()"
+        >
+          Cancel
+        </button>
+
+        <button type="submit" class="btn btn-primary">
+          Use selected system
+        </button>
+
+      </div>
+
+    </form>
+
+  </div>
+
+  <form method="dialog" class="modal-backdrop">
+    <button>Close</button>
+  </form>
+</dialog>
+
+<script>
+const sceneFrame = document.getElementById("remote-view-scene-frame");
+
+function sendSceneCommand(command, value = null) {
+    if (!sceneFrame || !sceneFrame.contentWindow) {
+        return;
+    }
+
+    sceneFrame.contentWindow.postMessage(
+        {
+            type: "remote-view-scene-command",
+            command: command,
+            value: value,
+        },
+        window.location.origin
+    );
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  const form = document.getElementById("remote-view-form");
+  const textarea = document.getElementById("remote-view-message");
+  const sendButton = document.getElementById("remote-view-send");
+  const statusButton = document.getElementById("remote-view-status");
+  const processingPanel = document.getElementById("remote-view-processing");
+
+  if (!form || !textarea || !sendButton || !statusButton) {
+    return;
+    
+  //
+  // After a completed request the page reloads.
+  // Make absolutely sure the floor animation is stopped.
+  //
+  sendSceneCommand("STOP");
+    
+  }
+
+  form.addEventListener("submit", () => {
+
+      //
+      // Start the Three.js walking animation.
+      //
+      sendSceneCommand("START");
+
+      sendButton.disabled = true;
+      sendButton.textContent = "Thinking...";
+
+      textarea.readOnly = true;
+
+      statusButton.textContent = "Thinking";
+      statusButton.className = "badge badge-info cursor-pointer";
+
+      if (processingPanel) {
+        processingPanel.classList.add("is-active");
+      }
+
+  });
+
+});
+</script>
 
 {% endblock %}
 
