@@ -9,6 +9,8 @@ For now, mock mode returns one random response from a small built-in
 paragraph list. The real local Gemma/Ollama responder will replace the
 non-mock branch later without changing callers.
 """
+from __future__ import annotations
+
 import argparse
 import json
 import random
@@ -16,7 +18,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping, Sequence, List, Dict
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TOOLS_DIR = REPO_ROOT / "tools"
@@ -25,7 +27,7 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(TOOLS_DIR))
 
 from config import default_config_path, load_app_config
-from responder import process_prompt
+from responder import call_ollama, load_ollama_config
 
 def _config_api(cfg: Any) -> str:
     api = cfg.get(
@@ -156,11 +158,6 @@ def generate_remote_view(
         conversation length but does not use its contents to choose a mock
         response.
 
-    mock:
-        True forces a mock response. False requests the future live responder.
-        None uses the [remote_viewing] mock setting from config.ini, defaulting
-        to true while the real responder is not yet connected.
-
     Returns
     -------
     dict
@@ -176,8 +173,6 @@ def generate_remote_view(
 
     config_path = default_config_path()
     cfg, resolved_config_path, paths = load_app_config(config_path)
-
-    use_mock = _config_mock_enabled(cfg) if mock is None else bool(mock)
 
     if api == "mock":
 		#
@@ -200,14 +195,21 @@ def generate_remote_view(
         }
 
     if api == "ollama":
-		
-        return process_prompt(
-            prompt_text=prompt_text,
-            source="remoteviewing",
-            config_path=Path(settings["config_path"]),
-            ollama_section=settings.get("ollama_section", "ollama-interface"),
-        )
+        ollama_cfg = load_ollama_config()
+        answer_text = call_ollama(prompt_text, ollama_cfg)
 
+        return {
+            "text": answer_text,
+            "role": "assistant",
+            "mode": "ollama",
+            "model": ollama_cfg.model,
+            "prompt": prompt_text,
+            "conversation_length": len(conversation_items),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "config_path": str(resolved_config_path),
+            "project_root": str(paths.project_root),
+        }
+   		
     if api == "remote":
         raise RuntimeError(
             "No live remote-viewing responder is not connected yet. "
@@ -216,6 +218,129 @@ def generate_remote_view(
     raise RuntimeError(
         "No live remote-viewing responder is not connected yet. "
     )
+
+def conversation_to_prompt(
+    prompt_text: str,
+    conversation: list[dict],
+) -> str:
+    parts: list[str] = []
+
+    for message in conversation:
+        role = str(message.get("role", "")).strip()
+        content = str(message.get("content", "")).strip()
+
+        if not content:
+            continue
+
+        label = "Human" if role == "user" else "AI"
+        parts.append(f"{label}: {content}")
+
+    parts.append(f"Human: {prompt_text}")
+    parts.append("AI:")
+
+    return "\n\n".join(parts)
+
+def _working_session_path() -> Path:
+    cfg, _resolved, paths = load_app_config(default_config_path())
+    return paths.cms_dir / "working-session.json"
+
+
+def load_working_session() -> List[Dict[str, str]]:
+    """
+    Load the current working remote-view session.
+
+    Returns:
+        [
+            {"role": "Human", "content": "..."},
+            {"role": "Ai",    "content": "..."},
+            ...
+        ]
+    """
+
+    path = _working_session_path()
+
+    if not path.exists():
+        return []
+
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        if isinstance(data, list):
+            return data
+
+    except Exception:
+        pass
+
+    return []
+
+
+def append_working_session(role: str, content: str) -> None:
+    """
+    Append one conversation block to the working session.
+    """
+
+    conversation = load_working_session()
+
+    conversation.append({
+        "role": role,
+        "content": content,
+    })
+
+    path = _working_session_path()
+
+    with path.open("w", encoding="utf-8") as f:
+        json.dump(
+            conversation,
+            f,
+            indent=2,
+            ensure_ascii=False,
+        )
+
+
+def clear_working_session() -> None:
+    """
+    Remove the current working session.
+    """
+
+    path = _working_session_path()
+
+    if path.exists():
+        path.unlink()
+
+def save_working_session_to_cms(
+    fields: dict | None = None,
+) -> tuple[str, Path]:
+    from createentry import create_entry
+    from addaistorytext import append_conversation_to_story
+
+    conversation = load_working_session()
+
+    if not conversation:
+        raise ValueError(
+            "There is no working remote-viewing session to save"
+        )
+
+    entry_fields = dict(fields or {})
+
+    entry_id, _entry_dir, story_path = create_entry(
+        "rv",
+        entry_fields,
+    )
+
+    block_count = append_conversation_to_story(
+        story_path,
+        conversation,
+    )
+
+    if block_count == 0:
+        raise ValueError(
+            "The working session contained no transcript blocks"
+        )
+
+    clear_working_session()
+
+    return entry_id, story_path
 
 
 def parse_args(

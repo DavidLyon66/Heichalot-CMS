@@ -41,6 +41,113 @@ def render_story(template_path: Path, context: dict) -> str:
     tmpl = env.get_template(template_path.name)
     return tmpl.render(**context)
 
+def entry_type_defaults(cfg, entry_type: str) -> dict:
+    entry_type = str(entry_type).strip().casefold()
+    kind = resolve_entry_kind(cfg, entry_type)
+
+    defaults = {
+        "kind": kind,
+    }
+
+    if entry_type == "rv":
+        defaults.update({
+            "kind": "remote_viewing",
+            "tags": ["remote-viewing"],
+            "status": "Draft",
+        })
+
+    elif entry_type == "st":
+        defaults.update({
+            "kind": "historic_site",
+            "tags": ["historic-site"],
+            "status": "Draft",
+        })
+
+    elif entry_type == "v":
+        defaults.update({
+            "kind": "video",
+            "tags": ["video"],
+            "status": "Draft",
+        })
+
+    return defaults
+    
+def create_entry(
+    entry_type: str,
+    fields: dict | None = None,
+    *,
+    config_path: str | Path | None = None,
+    prefix: str | None = None,
+    pad_width: int | None = None,
+) -> tuple[str, Path, Path]:
+
+    cfg, resolved_config_path, paths = load_app_config(config_path)
+
+    cms_dir = paths.cms_dir
+    cms_dir.mkdir(parents=True, exist_ok=True)
+
+    resolved_prefix = prefix or get_entry_prefix(cfg)
+    resolved_pad = pad_width or get_entry_pad_width(cfg)
+
+    last_id = get_last_id(cfg)
+    next_id_num = last_id + 1
+    entry_id = f"{resolved_prefix}{next_id_num:0{resolved_pad}d}"
+
+    entry_dir = (cms_dir / entry_id).resolve()
+
+    if entry_dir.exists():
+        raise FileExistsError(f"Entry already exists: {entry_dir}")
+
+    final_fields = build_entry_fields(
+        cfg,
+        entry_type,
+        fields,
+    )
+
+    now = datetime.now(timezone.utc)
+
+    final_fields["entry_id"] = entry_id
+    final_fields["created_utc"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    final_fields["entry_type"] = entry_type
+
+    if not final_fields.get("year"):
+        final_fields["year"] = now.year
+
+    if not final_fields.get("datetime"):
+        final_fields["datetime"] = (
+            f"{int(final_fields['year']):04d}-01-01"
+        )
+
+    template_path = get_template_path(cfg)
+
+    if not template_path.exists():
+        raise FileNotFoundError(
+            f"Template not found: {template_path}"
+        )
+
+    images_dir = entry_dir / "images"
+    images_dir.mkdir(parents=True, exist_ok=False)
+
+    story_path = entry_dir / "story.md"
+
+    story_text = render_story(
+        template_path,
+        final_fields,
+    )
+
+    story_path.write_text(
+        story_text,
+        encoding="utf-8",
+    )
+
+    set_last_id(
+        cfg,
+        next_id_num,
+        resolved_config_path,
+    )
+
+    return entry_id, entry_dir, story_path
+    
 
 def main() -> int:
     ap = argparse.ArgumentParser(
