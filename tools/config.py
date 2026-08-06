@@ -15,6 +15,7 @@ from __future__ import annotations
 import configparser
 import os
 import sys
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional
@@ -28,6 +29,8 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 from rich.prompt import Confirm, Prompt
+from urllib.error import HTTPError, URLError
+from urllib.request import urlopen
 
 console = Console()
 
@@ -117,6 +120,19 @@ def default_config_path() -> Path:
         return Path(override).expanduser().resolve()
 
     return platform_config_dir() / CONFIG_FILENAME
+
+def default_config_path() -> Path:
+    override = os.environ.get("HEICHALOT_CONFIG", "").strip()
+
+    if override:
+        return Path(override).expanduser().resolve()
+
+    for path in platform_config_paths():
+        if path.exists():
+            return path
+
+    return platform_config_dir() / CONFIG_FILENAME
+    
 
 def default_user_cms_dir() -> Path:
     return Path.home() / "Documents" / "heichalot-cms" / "cms"
@@ -440,32 +456,24 @@ def load_app_config(
     paths = resolve_paths(cfg, cfg_path)
     return cfg, cfg_path, paths
 
-def legacy_config_paths() -> list[Path]:
+def platform_config_paths() -> list[Path]:
     if os.name == "nt":
         appdata = os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")
         return [
-            Path(appdata) / "heichalotcms" / CONFIG_FILENAME,
             Path(appdata) / "HeichalotCMS" / CONFIG_FILENAME,
+            Path(appdata) / "heichalotcms" / CONFIG_FILENAME,
         ]
 
     if sys.platform == "darwin":
         return [
-            Path.home() / "Library" / "Application Support" / "heichalotcms" / CONFIG_FILENAME,
             Path.home() / "Library" / "Application Support" / "HeichalotCMS" / CONFIG_FILENAME,
+            Path.home() / "Library" / "Application Support" / "heichalotcms" / CONFIG_FILENAME,
             Path.home() / ".heichalotcms" / CONFIG_FILENAME,
         ]
 
     return [
         Path.home() / ".heichalotcms" / CONFIG_FILENAME,
     ]
-
-
-def default_config_path() -> Path:
-    for path in legacy_config_paths():
-        if path.exists():
-            return path
-
-    return platform_config_dir() / CONFIG_FILENAME
 
 
 def resolve_paths(
@@ -539,6 +547,25 @@ def show_config_status(config_path: Optional[Path] = None) -> None:
     table.add_row("Download dir", str(paths.download_dir) if exists else "")
     table.add_row("Cache dir", str(paths.cache_dir) if exists else "")
 
+    llm = detect_llm_system(cfg)
+
+    if not llm["installed"]:
+        llm_status = "Not installed"
+
+    elif llm["service_running"]:
+        llm_status = (
+            f"Ollama  {llm['executable']}, "
+            f"{llm['base_url']}"
+        )
+
+    else:
+        llm_status = (
+            f"Ollama installed at {llm['executable']}; "
+            f"service unavailable at {llm['base_url']}"
+        )
+
+    table.add_row("LLM System", llm_status)
+    
     console.print()
     console.print(
         Panel(
@@ -1517,7 +1544,59 @@ def _location_debug(message: str) -> None:
             f"[location-debug/config] {message}",
             file=sys.stderr,
         )
-        
+
+def detect_llm_system(
+    cfg: configparser.ConfigParser | None = None,
+) -> dict[str, object]:
+    """
+    Detect the configured local LLM system.
+
+    This currently supports Ollama only. Installation and service
+    availability are reported separately.
+    """
+
+    if cfg is None:
+        cfg = read_config()
+
+    base_url = cfg.get(
+        "ollama-interface",
+        "base_url",
+        fallback="http://localhost:11434",
+    ).strip().rstrip("/")
+
+    model = cfg.get(
+        "ollama-interface",
+        "model",
+        fallback="gemma3",
+    ).strip()
+
+    executable = shutil.which("ollama")
+
+    result: dict[str, object] = {
+        "system": "ollama",
+        "installed": executable is not None,
+        "executable": executable,
+        "base_url": base_url,
+        "model": model,
+        "service_running": False,
+        "error": None,
+    }
+
+    if executable is None:
+        return result
+
+    try:
+        with urlopen(
+            f"{base_url}/api/tags",
+            timeout=1.5,
+        ) as response:
+            result["service_running"] = 200 <= response.status < 300
+
+    except (HTTPError, URLError, TimeoutError, OSError) as exc:
+        result["error"] = str(exc)
+
+    return result
+            
 def main() -> int:
     import argparse
 
