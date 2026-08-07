@@ -11,6 +11,7 @@ from io import StringIO
 import re
 import fnmatch
 import random
+import json
 import threading
 import time
 import webview
@@ -46,8 +47,11 @@ if str(REPO_ROOT) not in sys.path:
 APP_DIR = Path(__file__).resolve().parent
 
 # Use the standard config module to resolve paths
-from config import (load_app_config, resolve_location, read_config, 
-                    default_config_path)
+from config import (load_app_config, 
+                    resolve_location, 
+                    read_config, 
+                    default_config_path,
+                    detect_llm_system)
 
 try:
     _cfg, _cfg_path, _paths = load_app_config(setup_if_missing=False)
@@ -1049,7 +1053,6 @@ def remote_view():
 
     backend = get_remote_view_backend()
     conversation = load_working_session()
-    
     print(f"[REMOTE VIEW] backend={backend!r}")
 
     if request.method == "POST":
@@ -1110,7 +1113,7 @@ def remote_view():
         latest_answer=latest_answer,
         remote_view_status=status,
         remote_view_backend=backend,
-        remote_view_models=["aja-focus"],
+        remote_view_models=[],
     )
  
 @app.route("/remote-view/backend", methods=["POST"])
@@ -1178,7 +1181,20 @@ def remote_view_finish_save():
 def remote_view_finish_discard():
     clear_working_session()
     return redirect(url_for("remote_view"))
-               
+
+@app.get("/api/llm-status")
+def api_llm_status():
+    llm = detect_llm_system()
+
+    return jsonify({
+        "system": llm["system"],
+        "installed": llm["installed"],
+        "running": llm["service_running"],
+        "model": llm["model"],
+        "base_url": llm["base_url"],
+        "models": llm["models"],
+    })
+                   
 @app.route("/maplinks/<entry_id>")
 def maplinks(entry_id):
     linked_sites = [
