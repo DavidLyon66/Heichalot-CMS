@@ -126,11 +126,54 @@ heichalot-update --flush
 
 ---
 
-## 6. Development
+## Installing the Default Remote-Viewing Model
 
-To regenerate all three server variants from the Jinja2 template:
+The Heichalot-CMS remote-viewing system uses a local Large Language Model (LLM)
+running under Ollama.
+
+Installing Ollama by itself is **not** sufficient. At least one compatible model
+must also be installed before the live remote-viewing system can be used.
+
+The default configuration uses the gemma3 LLM. It has been tested to be
+able to provide baseline remote-viewing capabilities.
+
+You can check your installation at any time by running:
 
 ```bash
-cd server-side
-python3 makeserver.py all
+python3 tools/config.py
 ```
+Example output:
+```bash
+╭───────────────────── Heichalot-CMS Configuration ──────────────────────╮
+│  Config exists  yes                                                    │
+│  Config path    /home/dlyon/.heichalotcms/config.ini                   │
+│  ...                                                                   │
+│  LLM System     Ollama  /usr/local/bin/ollama, http://localhost:11434  │
+│  LLM Model      gemma3  installed                                      │
+╰────────────────────────────────────────────────────────────────────────╯
+```
+
+If the model is not installed, install the configured default model with:
+
+```bash
+python3 tools/config.py --install-default-model
+```
+
+This command reads the configured model from config.ini and downloads it into
+the local Ollama installation.
+
+Alternatively, you may install models manually using the standard Ollama
+commands.
+
+If Ollama is not installed, the configuration utility will report:
+
+```bash
+LLM System     Not installed
+```
+
+In this case, install Ollama first, then run the command above to install the
+default model.
+
+Once both Ollama and the configured model are installed, the Heichalot RV
+backend becomes available from the Remote-Viewing screen.
+
