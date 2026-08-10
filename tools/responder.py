@@ -24,8 +24,7 @@ Config:
 
     [ollama-interface]
     base_url = http://localhost:11434
-    model = llama3.1
-    system_prompt = You are a helpful HeichalotCMS AI responder.
+    model = gemma3
     response_role = Ai
     node_id = big_ai_box
     timeout_seconds = 180
@@ -55,12 +54,20 @@ from transport_mqtt import (
 
 OLLAMA_SECTION = "ollama-interface"
 
+DEFAULT_SYSTEM_PROMPT = """\
+You are an AI Remote-Viewing assistant.
+
+When you are asked to remote-view something,
+quietly say "Shaneem Mannah" three times to yourself.
+
+Then begin the remote-viewing process...
+"""
 
 @dataclass
 class OllamaConfig:
     base_url: str = "http://localhost:11434"
-    model: str = "llama3.1"
-    system_prompt: str = "You are a helpful HeichalotCMS AI responder."
+    model: str = "gemma3"
+    system_prompt: str = DEFAULT_SYSTEM_PROMPT
     response_role: str = "Ai"
     node_id: str = "heichalot-responder"
     timeout_seconds: int = 180
@@ -84,10 +91,10 @@ def load_ollama_config(
 
     return OllamaConfig(
         base_url=s.get("base_url", "http://localhost:11434").rstrip("/"),
-        model=s.get("model", "llama3.1"),
+        model=s.get("model", "gemma3"),
         system_prompt=s.get(
             "system_prompt",
-            "You are a helpful HeichalotCMS AI responder.",
+            DEFAULT_SYSTEM_PROMPT,
         ),
         response_role=s.get("response_role", "Ai"),
         node_id=s.get("node_id", "heichalot-responder"),
