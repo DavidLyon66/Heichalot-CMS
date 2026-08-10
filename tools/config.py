@@ -24,6 +24,7 @@ from math import asin, cos, radians, sin, sqrt
 import re
 import unicodedata
 import yaml
+import json
 from typing import Any
 from rich.console import Console
 from rich.panel import Panel
@@ -551,21 +552,35 @@ def show_config_status(config_path: Optional[Path] = None) -> None:
 
     if not llm["installed"]:
         llm_status = "Not installed"
+        model_status = "Unavailable"
 
-    elif llm["service_running"]:
+    elif not llm["service_running"]:
+        llm_status = (
+            f"Ollama installed at {llm['executable']}; "
+            f"service unavailable at {llm['base_url']}"
+        )
+        model_status = str(llm["model"])
+
+    else:
         llm_status = (
             f"Ollama  {llm['executable']}, "
             f"{llm['base_url']}"
         )
 
-    else:
-        llm_status = (
-            f"Ollama installed at {llm['executable']}; "
-            f"service unavailable at {llm['base_url']}"
-        )
+        configured_model = str(llm["model"])
+        installed_models = {
+            str(name).split(":", 1)[0]
+            for name in llm.get("models", [])
+        }
+
+        if configured_model in installed_models:
+            model_status = f"{configured_model}  installed"
+        else:
+            model_status = f"{configured_model}  not installed"
 
     table.add_row("LLM System", llm_status)
-    
+    table.add_row("LLM Model", model_status)
+
     console.print()
     console.print(
         Panel(
@@ -580,7 +595,95 @@ def show_config_status(config_path: Optional[Path] = None) -> None:
         console.print("[yellow]No config.ini found.[/yellow]")
         console.print("Run setup with:")
         console.print("  [bold]heichalot-config --setup[/bold]")
+        
+def install_default_model(cfg: configparser.ConfigParser) -> bool:
+    llm = detect_llm_system(cfg)
 
+    if not llm["installed"]:
+        console.print(
+            "[red]Ollama is not installed.[/red]"
+        )
+        return False
+
+    if not llm["service_running"]:
+        console.print(
+            "[red]Ollama is installed but not running.[/red]"
+        )
+        return False
+
+    model = str(llm["model"]).strip()
+    models = {
+        str(name).split(":", 1)[0]
+        for name in llm.get("models", [])
+    }
+
+    if model in models:
+        console.print(
+            f"[green]Model already installed:[/green] {model}"
+        )
+        return True
+
+    console.print(
+        f"[cyan]Installing Ollama model:[/cyan] {model}"
+    )
+
+    payload = json.dumps({
+        "model": model,
+        "stream": True,
+    }).encode("utf-8")
+
+    request = urllib.request.Request(
+        f"{llm['base_url']}/api/pull",
+        data=payload,
+        headers={
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(
+            request,
+            timeout=3600,
+        ) as response:
+
+            for raw_line in response:
+                line = raw_line.decode(
+                    "utf-8",
+                    errors="replace",
+                ).strip()
+
+                if not line:
+                    continue
+
+                data = json.loads(line)
+
+                status = data.get("status", "")
+                completed = data.get("completed")
+                total = data.get("total")
+
+                if completed is not None and total:
+                    percent = (completed / total) * 100
+                    console.print(
+                        f"\r{status}: {percent:5.1f}%",
+                        end="",
+                    )
+                elif status:
+                    console.print(status)
+
+    except Exception as exc:
+        console.print(
+            f"[red]Model installation failed:[/red] {exc}"
+        )
+        return False
+
+    console.print()
+    console.print(
+        f"[green]Installed model:[/green] {model}"
+    )
+
+    return True
+    
 
 def get_cms_dir(cfg: configparser.ConfigParser, config_path: Optional[Path] = None) -> Path:
     return resolve_paths(cfg, config_path).cms_dir
@@ -1551,8 +1654,8 @@ def detect_llm_system(
     """
     Detect the configured local LLM system.
 
-    This currently supports Ollama only. Installation and service
-    availability are reported separately.
+    This currently supports Ollama only. Installation, service
+    availability, and installed models are reported separately.
     """
 
     if cfg is None:
@@ -1579,6 +1682,8 @@ def detect_llm_system(
         "base_url": base_url,
         "model": model,
         "service_running": False,
+        "models": [],
+        "configured_model_present": False,
         "error": None,
     }
 
@@ -1590,13 +1695,30 @@ def detect_llm_system(
             f"{base_url}/api/tags",
             timeout=1.5,
         ) as response:
-            result["service_running"] = 200 <= response.status < 300
+            data = json.load(response)
 
-    except (HTTPError, URLError, TimeoutError, OSError) as exc:
+        models = [
+            str(item.get("name", "")).strip()
+            for item in data.get("models", [])
+            if item.get("name")
+        ]
+
+        result["service_running"] = True
+        result["models"] = models
+
+        configured_model = model.casefold()
+
+        result["configured_model_present"] = any(
+            installed.casefold() == configured_model
+            or installed.casefold().split(":", 1)[0] == configured_model
+            for installed in models
+        )
+
+    except Exception as exc:
         result["error"] = str(exc)
 
     return result
-            
+                
 def main() -> int:
     import argparse
 
