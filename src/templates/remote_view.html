@@ -52,7 +52,7 @@
         type="button"
         id="remote-view-status"
         class="badge badge-{{ remote_view_status.level }} cursor-pointer"
-        onclick="remote_view_backend_dialog.showModal()"
+        onclick="updateLlmStatus(); remote_view_backend_dialog.showModal()"
         title="Change remote-viewing system"
       >
         {{ remote_view_status.text }}
@@ -303,38 +303,30 @@
         </div>
       </label>
 
- 	  <label
-	    class="mt-2 flex items-center gap-3 rounded-lg p-3
-		  	   {% if ollama_available %}
-			     cursor-pointer hover:bg-base-200
-			   {% else %}
-			     cursor-not-allowed opacity-45
-			   {% endif %}"
-	  >
-	    <input
-		  type="radio"
-		  name="backend"
-		  value="ollama"
-		  class="radio radio-primary"
-		  {% if remote_view_backend == "ollama" and ollama_available %}checked{% endif %}
-		  {% if not ollama_available %}disabled{% endif %}
-	    >
+      <label
+        id="ollama-backend-label"
+        class="mt-2 flex items-center gap-3 rounded-lg p-3"
+      >
+        <input
+          id="ollama-backend-radio"
+          type="radio"
+          name="backend"
+          value="ollama"
+          class="radio radio-primary"
+          {% if remote_view_backend == "ollama" %}checked{% endif %}
+        >
 
-	    <div>
-		  <div class="font-medium">Heichalot RV</div>
+        <div>
+          <div class="font-medium">Heichalot RV</div>
 
-		  {% if ollama_available %}
-		    <div class="text-xs opacity-55">
-			  Live AI remote-viewing engine.
-		    </div>
-		  {% else %}
-		    <div class="text-xs text-warning">
-			  LLM System not available. Install or configure Ollama and the
-			  Custom Heichalot.tech Remote-Viewing LLM.
-		    </div>
-		  {% endif %}
-	    </div>
-	  </label>
+          <div
+            id="ollama-backend-status"
+            class="text-xs opacity-55"
+          >
+            Checking local LLM system...
+          </div>
+        </div>
+      </label>
 
       <div class="modal-action">
 
@@ -364,6 +356,62 @@
 <script>
 const sceneFrame = document.getElementById("remote-view-scene-frame");
 
+async function updateLlmStatus() {
+    const radio = document.getElementById("ollama-backend-radio");
+    const label = document.getElementById("ollama-backend-label");
+    const message = document.getElementById("ollama-backend-status");
+
+    try {
+        const response = await fetch("/api/llm-status");
+        const status = await response.json();
+
+        const configured = String(status.model || "").toLowerCase();
+
+        const modelAvailable = (status.models || []).some(name => {
+            const installed = String(name || "").toLowerCase();
+
+            return (
+                installed === configured ||
+                installed.split(":")[0] === configured
+            );
+        });
+
+        const available =
+            status.installed &&
+            status.running &&
+            modelAvailable;
+
+        radio.disabled = !available;
+
+        if (available) {
+            label.classList.remove(
+                "cursor-not-allowed",
+                "opacity-45"
+            );
+            label.classList.add(
+                "cursor-pointer",
+                "hover:bg-base-200"
+            );
+
+            message.textContent =
+                `Live AI remote-viewing engine — ${status.model} ready.`;
+        } else {
+            label.classList.add(
+                "cursor-not-allowed",
+                "opacity-45"
+            );
+
+            message.textContent =
+                "LLM System not available. Install or configure Ollama and the Custom Heichalot.tech Remote-Viewing LLM.";
+        }
+
+    } catch (error) {
+        radio.disabled = true;
+        message.textContent =
+            "Unable to determine local LLM status.";
+    }
+}
+
 function sendSceneCommand(command, value = null) {
     if (!sceneFrame || !sceneFrame.contentWindow) {
         return;
@@ -386,15 +434,14 @@ document.addEventListener("DOMContentLoaded", () => {
   const statusButton = document.getElementById("remote-view-status");
   const processingPanel = document.getElementById("remote-view-processing");
 
-  if (!form || !textarea || !sendButton || !statusButton) {
-    return;
-    
   //
   // After a completed request the page reloads.
   // Make absolutely sure the floor animation is stopped.
   //
   sendSceneCommand("STOP");
-    
+
+  if (!form || !textarea || !sendButton || !statusButton) {
+    return;
   }
 
   form.addEventListener("submit", () => {
