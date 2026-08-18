@@ -305,6 +305,40 @@ def story_markdown_to_html(
 
         body_html, _first_h1 = markdown_to_html(markdown_body)
 
+        illustration = find_illustration_image(
+            story_path
+        )
+
+        if illustration is not None:
+            image_name = illustration.name
+
+            image_src = (
+                f"/entry/{html.escape(entry_id, quote=True)}"
+                f"/image/{html.escape(image_name, quote=True)}"
+            )
+
+            image_html = (
+                f'<div class="story-preview-image">'
+                f'<img src="{image_src}" '
+                f'alt="Story preview">'
+                f'</div>'
+            )
+
+            h1_end = body_html.find("</h1>")
+
+            if h1_end != -1:
+                insert_at = h1_end + len("</h1>")
+
+                body_html = (
+                    body_html[:insert_at]
+                    + "\n"
+                    + image_html
+                    + "\n"
+                    + body_html[insert_at:]
+                )
+            else:
+                body_html = image_html + "\n" + body_html
+            
         rendered[story_path.name] = body_html
 
     return rendered

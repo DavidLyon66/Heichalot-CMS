@@ -28,6 +28,7 @@ sys.path.insert(0, str(TOOLS_DIR))
 
 from config import default_config_path, load_app_config
 from responder import call_ollama, load_ollama_config
+from createentry import create_entry
 
 def _config_api(cfg: Any) -> str:
     api = cfg.get(
@@ -275,7 +276,10 @@ def load_working_session() -> List[Dict[str, str]]:
     return []
 
 
-def append_working_session(role: str, content: str) -> None:
+def append_working_session(
+    role: str,
+    content: str,
+) -> None:
     """
     Append one conversation block to the working session.
     """
@@ -287,16 +291,8 @@ def append_working_session(role: str, content: str) -> None:
         "content": content,
     })
 
-    path = _working_session_path()
-
-    with path.open("w", encoding="utf-8") as f:
-        json.dump(
-            conversation,
-            f,
-            indent=2,
-            ensure_ascii=False,
-        )
-
+    write_working_session(conversation)
+    
 
 def clear_working_session() -> None:
     """
@@ -308,11 +304,45 @@ def clear_working_session() -> None:
     if path.exists():
         path.unlink()
 
+def write_working_session(
+    conversation: list[dict],
+) -> None:
+    """
+    Replace the current working remote-viewing session.
+
+    If conversation is empty, remove working-session.json.
+    """
+
+    path = _working_session_path()
+
+    if not conversation:
+        if path.exists():
+            path.unlink()
+        return
+
+    with path.open(
+        "w",
+        encoding="utf-8",
+    ) as f:
+        json.dump(
+            conversation,
+            f,
+            indent=2,
+            ensure_ascii=False,
+        )
+        
 def save_working_session_to_cms(
     fields: dict | None = None,
+    *,
+    image: str | Path | None = None,
+    images: list[str | Path] | None = None,
 ) -> tuple[str, Path]:
-    from createentry import create_entry
-    from addaistorytext import append_conversation_to_story
+    """
+    Save the complete working remote-viewing session as a CMS entry.
+
+    createentry.py owns conversion of the conversation into story.md format
+    and placement of primary/additional images.
+    """
 
     conversation = load_working_session()
 
@@ -321,28 +351,16 @@ def save_working_session_to_cms(
             "There is no working remote-viewing session to save"
         )
 
-    entry_fields = dict(fields or {})
-
     entry_id, _entry_dir, story_path = create_entry(
         "rv",
-        entry_fields,
+        fields=entry_fields,
+        conversation=conversation,
     )
-
-    block_count = append_conversation_to_story(
-        story_path,
-        conversation,
-    )
-
-    if block_count == 0:
-        raise ValueError(
-            "The working session contained no transcript blocks"
-        )
 
     clear_working_session()
 
     return entry_id, story_path
-
-
+    
 def parse_args(
     argv: Sequence[str] | None = None,
 ) -> argparse.Namespace:
