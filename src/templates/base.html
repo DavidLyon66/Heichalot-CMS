@@ -255,6 +255,11 @@
       color: white;
     }
 
+    .story-content img {
+      max-width: 100%;
+      height: auto;
+    }
+    
     .modal-content.orange-theme {
       background: linear-gradient(180deg, #d8923a, #e67e22);
       color: #2b1a0a;
@@ -837,6 +842,78 @@
       }
     }
 
+
+    /* ---------------------------------------------------------
+       Crypto workstation layout
+       --------------------------------------------------------- */
+
+    body.crypto-page {
+      overflow: hidden;
+    }
+
+    body.crypto-page .app-content {
+      min-width: 0;
+      height: calc(100vh - 64px);
+      overflow: hidden;
+      padding: 0;
+    }
+
+    body.crypto-page .app-content main {
+      width: 100%;
+      max-width: none;
+      height: 100%;
+      margin: 0;
+      padding: 0;
+      border-radius: 0;
+      background: var(--color-base-100);
+      box-shadow: none;
+      overflow: hidden;
+    }
+
+    body.theme-dark.crypto-page .app-content main {
+      background: var(--color-base-100);
+      border-radius: 0;
+      box-shadow: none;
+    }
+
+    .crypto-workspace {
+      display: flex;
+      flex-direction: column;
+      width: 100%;
+      height: 100%;
+      min-height: 0;
+      background: var(--color-base-100);
+    }
+
+    .crypto-workspace-header {
+      flex: 0 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--color-base-300);
+      background: var(--color-base-200);
+    }
+
+    .crypto-workspace-stage {
+      position: relative;
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow: hidden;
+      background: #0d1214;
+    }
+
+    .crypto-workspace-frame {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      border: 0;
+      display: block;
+      background: #0d1214;
+    }
+
   </style>
   <script src="https://unpkg.com/htmx.org@1.9.12"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
@@ -1347,19 +1424,24 @@
 	</li>
 
 	<li>
-	  <a href="/search">
+	  <button
+		type="button"
+		onclick="cms_search_modal.showModal()"
+		class="flex items-center gap-2"
+	  >
 		<svg class="w-5 h-5"
 			 xmlns="http://www.w3.org/2000/svg"
 			 viewBox="0 0 24 24"
 			 fill="none">
-		  <path stroke="currentColor"
-				stroke-linecap="round"
-				stroke-width="2"
-				d="m21 21-3.5-3.5M17 10a7 7 0 1 1-14 0 7 7 0 0 1 14 0Z"/>
+		  <path
+			stroke="currentColor"
+			stroke-linecap="round"
+			stroke-width="2"
+			d="m21 21-3.5-3.5M17 10a7 7 0 1 1-14 0 7 7 0 0 1 14 0Z"/>
 		</svg>
 
 		Search
-	  </a>
+	  </button>
 	</li>
 
 {% if ai_notebook_enabled|default(false) %}
@@ -1394,8 +1476,30 @@
 		Remote View
 	  </a>
 	</li>
-  </ul>
 {% endif %}
+
+{% if crypto_ui_enabled|default(true) %}
+	<li>
+	  <a href="/crypto">
+		<svg class="w-5 h-5"
+			 xmlns="http://www.w3.org/2000/svg"
+			 viewBox="0 0 24 24"
+			 fill="none"
+			 aria-hidden="true">
+		  <path
+			stroke="currentColor"
+			stroke-linecap="round"
+			stroke-linejoin="round"
+			stroke-width="2"
+			d="M4 18V9m5 9V5m5 13v-7m5 7V3M3 21h18"/>
+		</svg>
+
+		Crypto
+	  </a>
+	</li>
+{% endif %}
+
+  </ul>
 
 </aside>
 
@@ -1420,6 +1524,76 @@
     </div>
 
   </div>
+
+	<dialog id="cms_search_modal" class="modal">
+
+	  <div class="modal-box">
+
+		<h3 class="text-lg font-bold">
+		  Search CMS
+		</h3>
+
+		<p class="py-2 opacity-70">
+		  Search story titles.
+		</p>
+
+		<form
+		  method="get"
+		  action="{{ url_for('search') }}"
+		>
+
+		  <label class="input input-bordered flex items-center gap-2 w-full mt-3">
+
+			<svg class="w-4 h-4 opacity-60"
+				 xmlns="http://www.w3.org/2000/svg"
+				 viewBox="0 0 24 24"
+				 fill="none">
+			  <path
+				stroke="currentColor"
+				stroke-linecap="round"
+				stroke-width="2"
+				d="m21 21-3.5-3.5M17 10a7 7 0 1 1-14 0 7 7 0 0 1 14 0Z"/>
+			</svg>
+
+			<input
+			  type="search"
+			  name="q"
+			  class="grow"
+			  placeholder="Search story titles..."
+			  autocomplete="off"
+			  autofocus
+			>
+
+		  </label>
+
+		  <div class="modal-action">
+
+			<button
+			  type="button"
+			  class="btn btn-ghost"
+			  onclick="cms_search_modal.close()"
+			>
+			  Cancel
+			</button>
+
+			<button
+			  type="submit"
+			  class="btn btn-primary"
+			>
+			  Search
+			</button>
+
+		  </div>
+
+		</form>
+
+	  </div>
+
+	  <form method="dialog" class="modal-backdrop">
+		<button>Close</button>
+	  </form>
+
+	</dialog>
 
   <div
     id="toast-area"

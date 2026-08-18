@@ -258,17 +258,31 @@
           --meta-text: #c7c7c7 !important;
         }
 
-        html,
-        body {
-          background: transparent !important;
-          color: ${baseContent} !important;
-        }
+		html,
+		body {
+			background: ${base200} !important;
+			color: ${baseContent} !important;
+		}
 
-        body {
-          max-width: none !important;
-          margin: 0 !important;
-          padding: 0 !important;
-        }
+		body {
+			max-width: none !important;
+			margin: 0 !important;
+			padding: 0 !important;
+		}
+
+		/* Bare fragments returned by story_markdown_to_html(). */
+		body > h1,
+		body > h2,
+		body > h3 {
+			color: ${headingGold} !important;
+		}
+
+		body > p,
+		body > ul,
+		body > ol,
+		body > blockquote {
+			color: ${baseContent} !important;
+		}
 
         .page {
           width: 100% !important;
@@ -301,9 +315,21 @@
         }
 
         img {
-          background: ${base100} !important;
-          border-color: ${base300} !important;
+            background: ${base100} !important;
+            border-color: ${base300} !important;
         }
+
+        .story-preview-image {
+            text-align: center;
+        }
+
+        .story-preview-image img {
+            display: block;
+            max-width: 80% !important;
+            height: auto !important;
+            margin: 0 auto 1.25rem auto !important;
+        }
+        
       `;
 
       /*

@@ -1,0 +1,764 @@
+{% extends "base.html" %}
+
+{% block title %}
+Finish Remote-Viewing Session — Heichalot CMS
+{% endblock %}
+
+{% block body_class %}remote-view-finish-page{% endblock %}
+
+{% block head_extra %}
+<style>
+
+  body.remote-view-finish-page .app-content main {
+    width: 100%;
+    max-width: 1500px;
+  }
+
+  .rv-finish-layout {
+    display: grid;
+    grid-template-columns:
+      minmax(520px, 1.5fr)
+      minmax(320px, 0.7fr);
+    gap: 24px;
+  }
+
+  .rv-session-list {
+    overflow: hidden;
+    border: 1px solid var(--color-base-300);
+    border-radius: var(--radius-box);
+  }
+
+  .rv-session-header,
+  .rv-session-row {
+    display: grid;
+    grid-template-columns:
+      44px
+      minmax(220px, 1fr)
+      minmax(180px, 0.8fr);
+    gap: 12px;
+    align-items: center;
+  }
+
+  .rv-session-header {
+    padding: 10px 14px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    opacity: 0.65;
+    background: var(--color-base-200);
+  }
+
+  .rv-session-row {
+    padding: 14px;
+    border-top: 1px solid var(--color-base-300);
+  }
+
+  .rv-session-row:hover {
+    background: var(--color-base-200);
+  }
+
+  .rv-session-prompt {
+    font-weight: 500;
+  }
+
+  .rv-session-response {
+    font-size: 0.85rem;
+    opacity: 0.6;
+  }
+
+  .rv-entry-panel {
+    align-self: start;
+    padding: 22px;
+    border: 1px solid var(--color-base-300);
+    border-radius: var(--radius-box);
+    background: var(--color-base-200);
+  }
+
+  @media (max-width: 950px) {
+
+    .rv-finish-layout {
+      grid-template-columns: 1fr;
+    }
+
+  }
+
+</style>
+{% endblock %}
+
+
+{% block content %}
+
+<div class="mb-6">
+
+  <div class="text-xs uppercase tracking-widest opacity-50">
+    Heichalot SkyLab
+  </div>
+
+  <div class="flex items-center justify-between gap-4 mt-1">
+
+    <div>
+      <h1 class="text-2xl font-semibold">
+        Finish Remote-Viewing Session
+      </h1>
+
+      <p class="text-sm opacity-60 mt-1">
+        Select the prompt and response pairs that belong
+        together, then save them as a CMS story.
+      </p>
+    </div>
+
+    <div class="flex items-center gap-2">
+
+      <button
+        type="button"
+        class="btn btn-sm btn-outline btn-error"
+        onclick="clear_session_dialog.showModal()"
+      >
+        Clear
+      </button>
+
+      <a
+        href="{{ url_for('remote_view') }}"
+        class="btn btn-ghost"
+      >
+        ← Back to session
+      </a>
+
+    </div>
+
+  </div>
+
+</div>
+
+
+<div class="rv-finish-layout">
+
+  <!-- LEFT: working-session.json -->
+
+  <section>
+
+    <div class="flex items-center justify-between mb-3">
+
+      <h2 class="font-semibold">
+        Session material
+      </h2>
+
+      <span
+        id="session-count"
+        class="badge badge-outline"
+      >
+        {{ session_pair_count }} pairs
+      </span>
+
+    </div>
+
+
+    <div class="rv-session-list">
+
+      <div class="rv-session-header">
+        <div></div>
+        <div>Prompt</div>
+        <div>Response</div>
+      </div>
+
+      <div id="session-items">
+
+        <div class="p-6 text-sm opacity-55">
+          Loading session...
+        </div>
+
+      </div>
+
+    </div>
+
+  </section>
+
+
+  <!-- RIGHT: new CMS entry -->
+
+  <aside class="rv-entry-panel">
+
+    <h2 class="text-lg font-semibold">
+      Save selected items
+    </h2>
+
+    <p class="text-sm opacity-60 mt-1 mb-5">
+      Create a CMS entry from the selected parts
+      of this session.
+    </p>
+
+
+    <form id="rv-finish-form">
+
+      <label class="form-control w-full mb-4">
+
+        <div class="label">
+          <span class="label-text">
+            Story title
+          </span>
+        </div>
+
+        <input
+          id="story-title"
+          type="text"
+          class="input input-bordered w-full"
+          required
+        >
+
+      </label>
+
+
+      <label class="form-control w-full mb-4">
+
+		<div
+		  id="preview-image-panel"
+		  class="mb-4 hidden"
+		>
+
+		  <div class="label">
+			<span class="label-text">
+			  Preview image
+			</span>
+		  </div>
+
+		  <div
+			class="border border-base-300 rounded-lg overflow-hidden bg-base-300"
+		  >
+
+			<img
+			  id="preview-image"
+			  alt="Generated story preview"
+			  class="w-full object-cover"
+			  style="max-height: 220px;"
+			>
+
+		  </div>
+
+		  <div
+			id="preview-image-error"
+			class="text-xs text-error mt-2 hidden"
+		  >
+			Unable to load image.
+		  </div>
+
+		</div>
+
+        <div class="label">
+          <span class="label-text">
+            Type
+          </span>
+        </div>
+
+        <select
+          id="story-type"
+          class="select select-bordered w-full"
+        >
+          <option value="rv" selected>
+            Remote Viewing
+          </option>
+        </select>
+
+      </label>
+
+
+      <label class="form-control w-full mb-5">
+
+        <div class="label">
+          <span class="label-text">
+            Tags
+          </span>
+        </div>
+
+        <input
+          id="story-tags"
+          type="text"
+          class="input input-bordered w-full"
+          placeholder="remote-viewing, japan, history"
+        >
+
+      </label>
+
+
+      <label class="form-control w-full mb-4">
+        <div class="label"><span class="label-text">Location</span></div>
+        <input id="story-location" type="text" class="input input-bordered w-full" placeholder="">
+      </label>
+
+      <div class="form-control w-full mb-5">
+        <div class="label"><span class="label-text">Images</span></div>
+        <textarea id="story-images" class="textarea textarea-bordered w-full" rows="3" placeholder="~/Pictures/Screenshots/example.png&#10;One image path per line"></textarea>
+        <div class="flex gap-2 mt-2">
+          <button id="add-image-paths" type="button" class="btn btn-sm btn-outline">Add paths</button>
+          <button id="generate-preview" type="button" class="btn btn-sm btn-outline">Generate preview</button>
+        </div>
+        <div id="image-list" class="mt-2 flex flex-wrap gap-2"></div>
+        <div id="preview-message" class="text-xs mt-2 opacity-70"></div>
+      </div>
+
+      <div
+        id="save-message"
+        class="text-sm mb-4 hidden"
+      ></div>
+
+
+      <button
+        id="save-selected"
+        type="submit"
+        class="btn btn-primary w-full"
+      >
+        Save selected to CMS
+      </button>
+
+    </form>
+
+  </aside>
+
+</div>
+
+
+<dialog id="clear_session_dialog" class="modal">
+
+  <div class="modal-box">
+
+    <h3 class="text-lg font-bold">
+      Clear remote-viewing session?
+    </h3>
+
+    <p class="py-4 opacity-70">
+      Confirm deletion of all items in the current list.
+    </p>
+
+    <div class="modal-action">
+
+      <form method="dialog">
+        <button class="btn btn-ghost">
+          Cancel
+        </button>
+      </form>
+
+      <form
+        method="post"
+        action="{{ url_for('remote_view_reset') }}"
+      >
+        <button
+          type="submit"
+          class="btn btn-error"
+        >
+          Clear session
+        </button>
+      </form>
+
+    </div>
+
+  </div>
+
+  <form method="dialog" class="modal-backdrop">
+    <button>Close</button>
+  </form>
+
+</dialog>
+
+
+<script>
+
+let sessionPairs = [];
+
+
+function selectedPairIds() {
+
+    return Array.from(
+        document.querySelectorAll(
+            ".rv-pair-checkbox:checked"
+        )
+    ).map(
+        checkbox => Number(checkbox.value)
+    );
+
+}
+
+
+function shorten(text, length) {
+
+    text = String(text || "").trim();
+
+    if (text.length <= length) {
+        return text;
+    }
+
+    return text.slice(0, length) + "…";
+
+}
+
+
+function renderSessionPairs() {
+
+    const container =
+        document.getElementById("session-items");
+
+    const count =
+        document.getElementById("session-count");
+
+    count.textContent =
+        `${sessionPairs.length} pair${
+            sessionPairs.length === 1 ? "" : "s"
+        }`;
+
+    if (!sessionPairs.length) {
+
+        container.innerHTML = `
+          <div class="p-8 text-center opacity-55">
+            No unfiled session material remains.
+          </div>
+        `;
+
+        return;
+    }
+
+    container.innerHTML = "";
+
+    sessionPairs.forEach(pair => {
+
+        const row =
+            document.createElement("label");
+
+        row.className =
+            "rv-session-row cursor-pointer";
+
+        row.innerHTML = `
+          <div>
+            <input
+              type="checkbox"
+              class="checkbox checkbox-primary rv-pair-checkbox"
+              value="${pair.pair_id}"
+            >
+          </div>
+
+          <div
+            class="rv-session-prompt"
+            title=""
+          ></div>
+
+          <div
+            class="rv-session-response"
+            title=""
+          ></div>
+        `;
+
+        const prompt =
+            row.querySelector(
+                ".rv-session-prompt"
+            );
+
+        const response =
+            row.querySelector(
+                ".rv-session-response"
+            );
+
+        prompt.textContent =
+            shorten(pair.prompt, 100);
+
+        prompt.title =
+            pair.prompt;
+
+        response.textContent =
+            shorten(pair.response, 30);
+
+        response.title =
+            pair.response;
+
+        container.appendChild(row);
+
+    });
+
+}
+
+
+async function loadSession() {
+
+    const response =
+        await fetch(
+            "/api/remote-view/session"
+        );
+
+    const data =
+        await response.json();
+
+    if (!data.ok) {
+        throw new Error(
+            data.error || "Unable to load session"
+        );
+    }
+
+    sessionPairs =
+        data.pairs || [];
+
+    renderSessionPairs();
+
+}
+
+
+let entryImages = [];
+
+function normaliseImagePaths(text) {
+    return String(text || "").split(/\r?\n/).map(v => v.trim()).filter(Boolean);
+}
+
+function renderImageList() {
+    const box = document.getElementById("image-list");
+    box.innerHTML = "";
+    entryImages.forEach((path, index) => {
+        const item = document.createElement("span");
+        item.className = "badge badge-outline gap-2";
+        item.title = path;
+        const name = path.split(/[\\/]/).pop() || path;
+        item.append(document.createTextNode(name + " "));
+        const remove = document.createElement("button");
+        remove.type = "button"; remove.textContent = "×"; remove.className = "opacity-70 hover:opacity-100";
+        remove.onclick = () => { entryImages.splice(index, 1); renderImageList(); };
+        item.appendChild(remove);
+        box.appendChild(item);
+    });
+}
+
+document.getElementById("add-image-paths").addEventListener("click", () => {
+    const input = document.getElementById("story-images");
+    for (const path of normaliseImagePaths(input.value)) {
+        if (!entryImages.includes(path)) entryImages.push(path);
+    }
+    input.value = "";
+    renderImageList();
+});
+
+document.getElementById("generate-preview").addEventListener("click", async () => {
+    const button = document.getElementById("generate-preview");
+    const message = document.getElementById("preview-message");
+    const selected = selectedPairIds();
+    const pair = sessionPairs.find(p => selected.includes(Number(p.pair_id))) || sessionPairs[0];
+    if (!pair) { message.textContent = "No session prompt is available."; return; }
+    button.disabled = true; message.textContent = "Generating preview...";
+    try {
+        const response = await fetch("/api/remote-view/preview", {
+            method: "POST", headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({prompt: pair.prompt, count: 1})
+        });
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || "Unable to generate preview");
+        for (const path of (data.images || [])) {
+            if (!entryImages.includes(path)) {
+                entryImages.push(path);
+            }
+        }
+
+        renderImageList();
+
+        if (data.images && data.images.length) {
+            showPreviewImage(
+                data.images[data.images.length - 1]
+            );
+            message.textContent = "Preview image added.";
+        } else {
+            message.textContent = "No preview image was generated.";
+        }
+    } catch (error) { message.textContent = error.message; }
+    finally { button.disabled = false; }
+});
+
+document
+  .getElementById("rv-finish-form")
+  .addEventListener(
+    "submit",
+    async function(event) {
+
+      event.preventDefault();
+
+      const selected =
+          selectedPairIds();
+
+      const message =
+          document.getElementById(
+              "save-message"
+          );
+
+      const button =
+          document.getElementById(
+              "save-selected"
+          );
+
+      if (!selected.length) {
+
+          message.textContent =
+              "Select at least one prompt/response pair.";
+
+          message.className =
+              "text-sm text-warning mb-4";
+
+          return;
+      }
+
+      button.disabled = true;
+      button.textContent = "Saving...";
+
+      try {
+
+          const response = await fetch(
+              "/api/remote-view/session",
+              {
+                  method: "POST",
+
+                  headers: {
+                      "Content-Type":
+                          "application/json"
+                  },
+
+                  body: JSON.stringify({
+                      selected: selected,
+
+                      title:
+                          document
+                            .getElementById(
+                                "story-title"
+                            )
+                            .value,
+
+                      type:
+                          document
+                            .getElementById(
+                                "story-type"
+                            )
+                            .value,
+
+                      tags:
+                          document
+                            .getElementById(
+                                "story-tags"
+                            )
+                            .value,
+
+                      location:
+                          document.getElementById("story-location").value,
+
+                      images: entryImages
+                  })
+              }
+          );
+
+          const data =
+              await response.json();
+
+          if (!response.ok || !data.ok) {
+              throw new Error(
+                  data.error ||
+                  "Unable to save CMS entry"
+              );
+          }
+
+          message.textContent =
+              `Saved as ${data.entry_id}`;
+
+          message.className =
+              "text-sm text-success mb-4";
+
+          document
+            .getElementById(
+                "story-title"
+            )
+            .value = "";
+
+          document
+            .getElementById(
+                "story-tags"
+            )
+            .value = "";
+
+          document.getElementById("story-location").value = "";
+          entryImages = [];
+          renderImageList();
+
+          await loadSession();
+
+      }
+      catch (error) {
+
+          message.textContent =
+              error.message;
+
+          message.className =
+              "text-sm text-error mb-4";
+
+      }
+      finally {
+
+          button.disabled = false;
+
+          button.textContent =
+              "Save selected to CMS";
+
+      }
+
+    }
+  );
+
+
+loadSession().catch(error => {
+
+    const container =
+        document.getElementById(
+            "session-items"
+        );
+
+    container.textContent =
+        "Unable to load working session: " +
+        error.message;
+
+});
+
+function showPreviewImage(imagePath) {
+
+    const panel =
+        document.getElementById(
+            "preview-image-panel"
+        );
+
+    const img =
+        document.getElementById(
+            "preview-image"
+        );
+
+    const error =
+        document.getElementById(
+            "preview-image-error"
+        );
+
+    if (!imagePath) {
+        return;
+    }
+
+    const filename =
+        String(imagePath)
+          .split(/[\\/]/)
+          .pop();
+
+    if (!filename) {
+        return;
+    }
+
+    panel.classList.remove("hidden");
+    error.classList.add("hidden");
+
+    img.onload = () => {
+        error.classList.add("hidden");
+    };
+
+    img.onerror = () => {
+        error.classList.remove("hidden");
+    };
+
+    img.src =
+        "/api/remote-view/preview-image/"
+        + encodeURIComponent(filename)
+        + "?t="
+        + Date.now();
+}
+
+</script>
+
+{% endblock %}

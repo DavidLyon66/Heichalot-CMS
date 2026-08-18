@@ -162,20 +162,32 @@
           </p>
         </div>
 
-        <form
-          method="post"
-          action="{{ url_for('remote_view_reset') }}">
+		<div class="flex items-center justify-between gap-3">
 
-          <button
-            type="submit"
-            class="btn btn-sm btn-outline"
-            {% if not conversation %}disabled{% endif %}>
-            Finish
-          </button>
+		  <div>
+<!--			<h2 class="font-semibold">
+			  Conversation
+			</h2>
+-->
+			<p class="text-xs opacity-55">
+			  {% if conversation %}
+				{{ conversation|length }}
+				message{% if conversation|length != 1 %}s{% endif %}
+			  {% else %}
+				New remote-viewing session
+			  {% endif %}
+			</p>
+		  </div>
 
-        </form>
+		  <a
+			href="{{ url_for('remote_view_finish') }}"
+			class="btn btn-sm btn-outline
+				   {% if not conversation %}btn-disabled{% endif %}"
+		  >
+			Finish
+		  </a>
 
-      </div>
+		</div>
 
     </header>
 

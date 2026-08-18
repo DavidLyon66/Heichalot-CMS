@@ -1,0 +1,357 @@
+{% extends "base.html" %}
+
+{% block title %}Crypto — Heichalot CMS{% endblock %}
+
+{% block body_class %}crypto-page{% endblock %}
+
+{% block content %}
+
+<div class="crypto-workspace">
+
+  <header class="crypto-workspace-header">
+    <div>
+      <div class="text-xs uppercase tracking-widest opacity-50">
+        Heichalot Crypto
+      </div>
+
+      <h1 class="text-xl font-semibold">
+        Crypto
+      </h1>
+    </div>
+
+    <div
+      id="crypto-frame-status"
+      class="badge badge-outline">
+      Loading viewer
+    </div>
+  </header>
+
+  <section class="crypto-workspace-stage">
+    <iframe
+      id="crypto-graph-frame"
+      class="crypto-workspace-frame"
+      src="{{ url_for('static', filename='cryptograph.html') }}"
+      title="Heichalot Crypto Graph"
+      allow="fullscreen">
+    </iframe>
+  </section>
+
+</div>
+
+<dialog id="crypto_add_asset_dialog" class="modal">
+  <div class="modal-box">
+
+    <h3 class="text-lg font-bold">
+      Add Crypto Asset
+    </h3>
+
+    <p class="mt-2 text-sm opacity-60">
+      Enter the asset code.
+    </p>
+
+    <form id="crypto-add-asset-form" class="mt-5">
+
+      <input
+        id="crypto-add-asset-code"
+        type="text"
+        class="input input-bordered w-full uppercase"
+        placeholder="MMT"
+        autocomplete="off"
+        required
+      >
+
+      <div class="modal-action">
+
+        <button
+          type="button"
+          class="btn btn-ghost"
+          onclick="crypto_add_asset_dialog.close()">
+          Cancel
+        </button>
+
+        <button
+          type="submit"
+          class="btn btn-primary">
+          Add Asset
+        </button>
+
+      </div>
+
+    </form>
+
+  </div>
+
+  <form method="dialog" class="modal-backdrop">
+    <button>Close</button>
+  </form>
+</dialog>
+
+<script>
+(function () {
+  "use strict";
+
+  const frame =
+      document.getElementById(
+          "crypto-graph-frame"
+      );
+
+  const status =
+      document.getElementById(
+          "crypto-frame-status"
+      );
+
+  const addAssetForm =
+      document.getElementById(
+          "crypto-add-asset-form"
+      );
+
+  const addAssetInput =
+      document.getElementById(
+          "crypto-add-asset-code"
+      );
+
+  const addAssetDialog =
+      document.getElementById(
+          "crypto_add_asset_dialog"
+      );
+
+
+  function sendCryptoCommand(
+      command,
+      value = null
+  ) {
+    if (!frame || !frame.contentWindow) {
+      return;
+    }
+
+    frame.contentWindow.postMessage(
+      {
+        type: "crypto-graph-command",
+        command: command,
+        value: value
+      },
+      window.location.origin
+    );
+  }
+
+
+  /*
+   * Make this available from the browser
+   * console while we are developing.
+   */
+  window.sendCryptoCommand =
+      sendCryptoCommand;
+
+
+  /*
+   * -------------------------------------------------------
+   * Messages FROM cryptograph.html
+   * -------------------------------------------------------
+   */
+
+  window.addEventListener(
+      "message",
+      function (event) {
+
+    if (
+        event.origin !==
+        window.location.origin
+    ) {
+      return;
+    }
+
+    const message = event.data;
+
+    if (
+      !message ||
+      message.type !==
+        "crypto-graph-event"
+    ) {
+      return;
+    }
+
+    console.debug(
+      "CryptoGraph event:",
+      message.event,
+      message.value
+    );
+
+
+    switch (message.event) {
+
+      case "READY":
+        status.textContent =
+            "Viewer ready";
+
+        status.className =
+            "badge badge-success";
+
+        break;
+
+
+      case "LOAD_DATA":
+        status.textContent =
+            "Viewer requested data";
+
+        status.className =
+            "badge badge-info";
+
+        break;
+
+
+      case "WALLET_ASSET_TOGGLE":
+
+        status.textContent =
+          (
+            message.value &&
+            message.value.asset
+              ? message.value.asset
+              : "Asset"
+          ) +
+          (
+            message.value &&
+            message.value.open
+              ? " opened"
+              : " closed"
+          );
+
+        break;
+
+
+      case "WALLET_ADD_REQUEST": {
+
+        status.textContent =
+            "Add Asset requested";
+
+        if (addAssetInput) {
+          addAssetInput.value = "";
+        }
+
+        if (addAssetDialog) {
+
+          addAssetDialog.showModal();
+
+          setTimeout(
+              function () {
+                addAssetInput?.focus();
+              },
+              50
+          );
+        }
+
+        break;
+      }
+
+    }
+  });
+
+
+  /*
+   * -------------------------------------------------------
+   * Add Asset form
+   * -------------------------------------------------------
+   */
+
+  if (addAssetForm) {
+
+    addAssetForm.addEventListener(
+      "submit",
+      async function (event) {
+
+        event.preventDefault();
+
+        const asset =
+          String(
+            addAssetInput.value || ""
+          )
+          .trim()
+          .toUpperCase();
+
+
+        if (!asset) {
+          return;
+        }
+
+
+        status.textContent =
+            `Adding ${asset}...`;
+
+        status.className =
+            "badge badge-info";
+
+
+        try {
+
+          const response =
+            await fetch(
+              "/crypto/api/wallet/add",
+              {
+                method: "POST",
+
+                headers: {
+                  "Content-Type":
+                      "application/json"
+                },
+
+                body: JSON.stringify({
+                  asset: asset
+                })
+              }
+            );
+
+
+          if (!response.ok) {
+            throw new Error(
+              `HTTP ${response.status}`
+            );
+          }
+
+
+          const walletData =
+              await response.json();
+
+
+          /*
+           * Send the authoritative,
+           * updated wallet back into
+           * cryptograph.html.
+           */
+          sendCryptoCommand(
+            "WALLET_CREATE",
+            walletData
+          );
+
+
+          addAssetDialog.close();
+
+
+          status.textContent =
+              `${asset} added`;
+
+          status.className =
+              "badge badge-success";
+
+
+        } catch (error) {
+
+          console.error(
+            "Unable to add asset:",
+            error
+          );
+
+          status.textContent =
+              `Unable to add ${asset}`;
+
+          status.className =
+              "badge badge-error";
+        }
+
+      }
+    );
+  }
+
+})();
+
+</script>
+
+{% endblock %}
