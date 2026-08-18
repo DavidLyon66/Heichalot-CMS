@@ -1,0 +1,1459 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Crypto Graph</title>
+
+  <style>
+    html, body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: #0d1214;
+      font-family: system-ui, sans-serif;
+    }
+
+    #scene {
+      width: 100%;
+      height: 100%;
+      display: block;
+      touch-action: none;
+    }
+
+    #status {
+      position: fixed;
+      top: 12px;
+      left: 12px;
+      z-index: 10;
+      padding: 8px 10px;
+      border-radius: 8px;
+      background: rgba(10, 15, 18, 0.72);
+      color: #dfe8ea;
+      border: 1px solid rgba(160, 190, 200, 0.18);
+      font-size: 13px;
+      line-height: 1.35;
+      pointer-events: none;
+      backdrop-filter: blur(6px);
+    }
+
+    #status .muted {
+      opacity: 0.65;
+    }
+  </style>
+</head>
+
+<body>
+  <canvas id="scene"></canvas>
+
+  <div id="status">
+    <div id="status-title">Crypto Graph</div>
+    <div id="status-detail" class="muted">No asset loaded</div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+
+  <script>
+    (function () {
+      "use strict";
+
+      const canvas = document.getElementById("scene");
+      const statusTitle = document.getElementById("status-title");
+      const statusDetail = document.getElementById("status-detail");
+
+      if (!window.THREE) {
+        console.error("Three.js did not load.");
+        statusDetail.textContent = "Three.js failed to load";
+        return;
+      }
+
+      /*
+        cryptograph.html
+
+        Simplistic first-pass Three.js crypto graph renderer.
+
+        This keeps the same broad structure used by remote_view_scene.html:
+          - standalone iframe-safe HTML
+          - Three.js canvas
+          - command dispatcher
+          - public JavaScript API
+          - postMessage interface
+          - continuous render loop
+
+        Version 0.1 intentionally supports one asset layer only.
+
+        Commands:
+          ADD_ASSET_LAYER
+          CLEAR_ASSET_LAYER
+          ADD_CHANNEL_FRAME
+          CLEAR_CHANNEL_FRAME
+          WALLET_CREATE
+          CLEAR_WALLET
+          RESET_VIEW
+          RESET
+
+        ADD_ASSET_LAYER expects an object such as:
+
+          {
+            "asset": "MMT",
+            "reference_currency": "USDT",
+            "colour": "#38bdf8",
+            "future_colour": "#e5e7eb",
+            "data": [
+              {"date":"2026-08-01","close":0.184},
+              {"date":"2026-08-02","close":0.191},
+              {"date":"2026-08-03","close":0.203,"future":true}
+            ]
+          }
+
+        The renderer deliberately knows very little about finance.
+        It takes date/close values and draws one coloured plane per point.
+      */
+
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x0d1214);
+      scene.fog = new THREE.Fog(0x0d1214, 35, 110);
+
+      const camera = new THREE.PerspectiveCamera(
+        50,
+        window.innerWidth / window.innerHeight,
+        0.1,
+        200
+      );
+
+      const renderer = new THREE.WebGLRenderer({
+        canvas,
+        antialias: true
+      });
+
+      renderer.setPixelRatio(
+        Math.min(window.devicePixelRatio || 1, 2)
+      );
+
+      renderer.setSize(
+        window.innerWidth,
+        window.innerHeight
+      );
+
+      /*
+        Small self-contained orbit-like navigator.
+
+        Drag       rotate around graph
+        Wheel      zoom
+        RESET_VIEW restore default camera
+
+        This avoids adding another external Three.js addon.
+      */
+
+      const view = {
+        yaw: 0,
+        pitch: 0.12,
+        distance: 34,
+        target: new THREE.Vector3(0, 4.2, -18)
+      };
+
+      const defaultView = {
+        yaw: view.yaw,
+        pitch: view.pitch,
+        distance: view.distance
+      };
+
+      let pointerDown = false;
+      let pointerX = 0;
+      let pointerY = 0;
+
+      function updateCamera() {
+        const cosPitch = Math.cos(view.pitch);
+
+        camera.position.set(
+          view.target.x + Math.sin(view.yaw) * cosPitch * view.distance,
+          view.target.y + Math.sin(view.pitch) * view.distance,
+          view.target.z + Math.cos(view.yaw) * cosPitch * view.distance
+        );
+
+        camera.lookAt(view.target);
+      }
+
+      canvas.addEventListener("pointerdown", function (event) {
+        pointerDown = true;
+        pointerX = event.clientX;
+        pointerY = event.clientY;
+        pointerStartX = event.clientX;
+        pointerStartY = event.clientY;
+        pointerMoved = false;
+        canvas.setPointerCapture(event.pointerId);
+      });
+
+      canvas.addEventListener("pointermove", function (event) {
+        if (!pointerDown) return;
+
+        const dx = event.clientX - pointerX;
+        const dy = event.clientY - pointerY;
+
+        if (
+          Math.abs(event.clientX - pointerStartX) > 5 ||
+          Math.abs(event.clientY - pointerStartY) > 5
+        ) {
+          pointerMoved = true;
+        }
+
+        pointerX = event.clientX;
+        pointerY = event.clientY;
+
+        view.yaw -= dx * 0.006;
+        view.pitch -= dy * 0.004;
+
+        view.pitch = Math.max(
+          -0.65,
+          Math.min(0.90, view.pitch)
+        );
+      });
+
+      function endPointer(event) {
+        const wasClick = !pointerMoved;
+        pointerDown = false;
+
+        try {
+          canvas.releasePointerCapture(event.pointerId);
+        } catch (_) {
+          /* Safe if pointer capture was already released. */
+        }
+
+        if (wasClick) {
+          handleWalletPointer(event);
+        }
+      }
+
+      canvas.addEventListener("pointerup", endPointer);
+      canvas.addEventListener("pointercancel", endPointer);
+
+      canvas.addEventListener(
+        "wheel",
+        function (event) {
+          event.preventDefault();
+
+          view.distance *= event.deltaY > 0 ? 1.08 : 0.92;
+          view.distance = Math.max(
+            12,
+            Math.min(90, view.distance)
+          );
+        },
+        { passive: false }
+      );
+
+      function resetView() {
+        view.yaw = defaultView.yaw;
+        view.pitch = defaultView.pitch;
+        view.distance = defaultView.distance;
+      }
+
+      /*
+        Reference grid.
+
+        The graph itself is positioned at z = -18 so the camera has
+        useful space in front of it and later asset layers can occupy
+        different z-depths.
+      */
+
+      const grid = new THREE.GridHelper(
+        80,
+        80,
+        0x56666c,
+        0x2b373b
+      );
+
+      grid.position.set(0, 0, -18);
+      scene.add(grid);
+
+      let assetLayer = null;
+      let channelFrame = null;
+      let assetPlotState = null;
+
+      let walletLayer = null;
+      let walletTiles = [];
+      const walletRaycaster = new THREE.Raycaster();
+      const walletPointer = new THREE.Vector2();
+
+      let pointerStartX = 0;
+      let pointerStartY = 0;
+      let pointerMoved = false;
+
+      const DEFAULT_WALLET = {
+        assets: [
+          { asset: "DGB", reference_currency: "USDT", widget: false, sortorder: 10 },
+          { asset: "MMT", reference_currency: "USDT", widget: false, sortorder: 20 },
+          { asset: "ACE", reference_currency: "USDT", widget: false, sortorder: 30 },
+          { asset: "ETH", reference_currency: "USDT", widget: true, sortorder: 40 },
+          { asset: "BTC", reference_currency: "USDT", widget: true, sortorder: 50 }
+        ]
+      };
+
+      function disposeObject3D(root) {
+        if (!root) return;
+
+        root.traverse(function (object) {
+          if (object.geometry) {
+            object.geometry.dispose();
+          }
+
+          if (object.material) {
+            if (Array.isArray(object.material)) {
+              object.material.forEach(function (material) {
+                material.dispose();
+              });
+            } else {
+              object.material.dispose();
+            }
+          }
+        });
+      }
+
+      function clearAssetLayer() {
+        clearChannelFrame();
+
+        if (assetLayer) {
+          scene.remove(assetLayer);
+          disposeObject3D(assetLayer);
+          assetLayer = null;
+        }
+
+        assetPlotState = null;
+
+        statusTitle.textContent = "Crypto Graph";
+        statusDetail.textContent = "No asset loaded";
+      }
+
+      function normaliseInput(value) {
+        if (!value || typeof value !== "object") {
+          throw new Error(
+            "ADD_ASSET_LAYER requires an object."
+          );
+        }
+
+        const rows = Array.isArray(value.data)
+          ? value.data
+          : Array.isArray(value.points)
+            ? value.points
+            : [];
+
+        const data = rows
+          .map(function (row) {
+            return {
+              date: row && row.date
+                ? String(row.date)
+                : "",
+              close: Number(
+                row && row.close !== undefined
+                  ? row.close
+                  : row && row.price
+              ),
+              future: Boolean(row && row.future)
+            };
+          })
+          .filter(function (row) {
+            return Number.isFinite(row.close);
+          });
+
+        if (!data.length) {
+          throw new Error(
+            "ADD_ASSET_LAYER contains no usable price data."
+          );
+        }
+
+        return {
+          asset: String(value.asset || "Asset"),
+          referenceCurrency: String(
+            value.reference_currency ||
+            value.referenceCurrency ||
+            ""
+          ),
+          colour: value.colour || value.color || "#38bdf8",
+          futureColour:
+            value.future_colour ||
+            value.futureColor ||
+            "#e5e7eb",
+          data: data
+        };
+      }
+
+      function addAssetLayer(value) {
+        let input;
+
+        try {
+          input = normaliseInput(value);
+        } catch (error) {
+          console.warn(error.message);
+          statusDetail.textContent = error.message;
+          return;
+        }
+
+        clearAssetLayer();
+
+        const closes = input.data.map(function (row) {
+          return row.close;
+        });
+
+        const minPrice = Math.min.apply(null, closes);
+        const maxPrice = Math.max.apply(null, closes);
+        const rawRange = maxPrice - minPrice;
+
+        /*
+          Price is normalised inside the supplied dataset rather than
+          forced to zero.  Otherwise modest market movement can become
+          visually flat.
+
+          The original raw close remains attached to each bar as
+          userData for future tooltips/inspection.
+        */
+        const graphHeight = 8.0;
+        const graphWidth = 30.0;
+        const baselineHeight = 0.35;
+
+        const count = input.data.length;
+        const spacing =
+          count > 1
+            ? graphWidth / (count - 1)
+            : graphWidth;
+
+        /*
+          The old narrow bar-width calculation now serves as the
+          desired inter-bar gap.
+
+          Bars themselves expand to fill the remaining width of each
+          time slot.  For dense histories the gap is capped to 20% of
+          the slot so hundreds of daily bars still remain visible.
+        */
+        const interBarGap = Math.max(
+          0.025,
+          Math.min(0.42, spacing * 0.72)
+        );
+
+        const slotWidth =
+          count > 1
+            ? graphWidth / count
+            : graphWidth;
+
+        const effectiveGap = Math.min(
+          interBarGap,
+          slotWidth * 0.20
+        );
+
+        const barWidth = Math.max(
+          0.025,
+          slotWidth - effectiveGap
+        );
+
+        const group = new THREE.Group();
+        group.name = "asset-layer:" + input.asset;
+        group.position.z = -18;
+
+        /*
+          Reuse two materials for efficiency rather than creating one
+          material per bar.
+
+          Normal historical rows use the asset colour.
+          Rows explicitly marked {"future": true} use futureColour.
+        */
+        const assetMaterial = new THREE.MeshBasicMaterial({
+          color: input.colour,
+          side: THREE.DoubleSide,
+          transparent: true,
+          opacity: 0.90
+        });
+
+        const futureMaterial = new THREE.MeshBasicMaterial({
+          color: input.futureColour,
+          side: THREE.DoubleSide,
+          transparent: true,
+          opacity: 0.82
+        });
+
+        input.data.forEach(function (row, index) {
+          const normalized =
+            rawRange > 0
+              ? (row.close - minPrice) / rawRange
+              : 0.5;
+
+          const height =
+            baselineHeight +
+            normalized * graphHeight;
+
+          const geometry = new THREE.PlaneGeometry(
+            barWidth,
+            height
+          );
+
+          const bar = new THREE.Mesh(
+            geometry,
+            row.future
+              ? futureMaterial
+              : assetMaterial
+          );
+
+          const x =
+            count > 1
+              ? -graphWidth / 2 + index * spacing
+              : 0;
+
+          bar.position.set(
+            x,
+            height / 2,
+            0
+          );
+
+          bar.userData = {
+            type: "price-bar",
+            asset: input.asset,
+            date: row.date,
+            close: row.close,
+            future: row.future
+          };
+
+          group.add(bar);
+        });
+
+        const baselineGeometry =
+          new THREE.BufferGeometry().setFromPoints([
+            new THREE.Vector3(-graphWidth / 2, 0, 0.01),
+            new THREE.Vector3(graphWidth / 2, 0, 0.01)
+          ]);
+
+        const baselineMaterial =
+          new THREE.LineBasicMaterial({
+            color: 0x7b8e94,
+            transparent: true,
+            opacity: 0.55
+          });
+
+        group.add(
+          new THREE.Line(
+            baselineGeometry,
+            baselineMaterial
+          )
+        );
+
+        assetLayer = group;
+        scene.add(assetLayer);
+
+        const datedRows = input.data.filter(function (row) {
+          return !Number.isNaN(Date.parse(row.date + "T00:00:00Z"));
+        });
+
+        const firstDateMs = datedRows.length
+          ? Date.parse(datedRows[0].date + "T00:00:00Z")
+          : null;
+
+        const lastDateMs = datedRows.length
+          ? Date.parse(
+              datedRows[datedRows.length - 1].date + "T00:00:00Z"
+            )
+          : null;
+
+        assetPlotState = {
+          minPrice: minPrice,
+          maxPrice: maxPrice,
+          rawRange: rawRange,
+          graphHeight: graphHeight,
+          graphWidth: graphWidth,
+          baselineHeight: baselineHeight,
+          spacing: spacing,
+          count: count,
+          firstDateMs: firstDateMs,
+          lastDateMs: lastDateMs,
+          layerZ: group.position.z
+        };
+
+        statusTitle.textContent =
+          input.referenceCurrency
+            ? input.asset + " / " + input.referenceCurrency
+            : input.asset;
+
+        const firstDate =
+          input.data[0].date || "?";
+
+        const lastDate =
+          input.data[input.data.length - 1].date || "?";
+
+        const futureCount = input.data.filter(function (row) {
+          return row.future;
+        }).length;
+
+        statusDetail.textContent =
+          input.data.length +
+          " points" +
+          (futureCount ? " (" + futureCount + " future)" : "") +
+          " | " +
+          firstDate +
+          " → " +
+          lastDate +
+          " | range " +
+          minPrice.toPrecision(5) +
+          " – " +
+          maxPrice.toPrecision(5);
+
+        resetView();
+      }
+
+
+
+      function parentTargetOrigin() {
+        try {
+          if (document.referrer) {
+            return new URL(document.referrer).origin;
+          }
+        } catch (_) {
+          /* Development fallback below. */
+        }
+        return "*";
+      }
+
+      function emitCryptoGraphEvent(eventName, value) {
+        const message = {
+          type: "crypto-graph-event",
+          event: String(eventName || ""),
+          value: value || {}
+        };
+
+        if (window.parent === window) {
+          console.debug("CryptoGraph event:", message);
+          return;
+        }
+
+        window.parent.postMessage(message, parentTargetOrigin());
+      }
+
+      function clearWallet() {
+        if (!walletLayer) return;
+
+        scene.remove(walletLayer);
+        disposeObject3D(walletLayer);
+        walletLayer = null;
+        walletTiles = [];
+      }
+
+      function normaliseWallet(value) {
+        const input = value && typeof value === "object" ? value : {};
+        let rows = [];
+
+        if (Array.isArray(input.assets)) {
+          rows = input.assets.slice();
+        } else {
+          const source =
+            input.assets && typeof input.assets === "object"
+              ? input.assets
+              : input;
+
+          rows = Object.keys(source)
+            .filter(function (key) {
+              return key !== "layout";
+            })
+            .map(function (key) {
+              const details =
+                source[key] && typeof source[key] === "object"
+                  ? source[key]
+                  : {};
+
+              return Object.assign({ asset: key }, details);
+            });
+        }
+
+        const assets = rows
+          .map(function (row, index) {
+            return {
+              asset: String(row.asset || row.symbol || "").trim().toUpperCase(),
+              reference_currency: String(
+                row.reference_currency || row.referenceCurrency || "USDT"
+              ).trim().toUpperCase(),
+              enabled: row.enabled === undefined ? true : Boolean(row.enabled),
+              widget: Boolean(row.widget),
+              sortorder: Number.isFinite(Number(row.sortorder))
+                ? Number(row.sortorder)
+                : (index + 1) * 10
+            };
+          })
+          .filter(function (row) {
+            return row.asset && row.enabled;
+          })
+          .sort(function (a, b) {
+            if (a.sortorder !== b.sortorder) {
+              return a.sortorder - b.sortorder;
+            }
+            return a.asset.localeCompare(b.asset);
+          });
+
+        return { assets: assets };
+      }
+
+      function walletTileTexture(item) {
+        const c = document.createElement("canvas");
+        c.width = 512;
+        c.height = 256;
+
+        const ctx = c.getContext("2d");
+        const isAction = item.type === "action";
+        const isWidget = Boolean(item.widget);
+
+        ctx.fillStyle = isAction
+          ? "rgba(35, 82, 92, 0.92)"
+          : isWidget
+            ? "rgba(56, 68, 92, 0.94)"
+            : "rgba(27, 74, 83, 0.94)";
+        ctx.fillRect(0, 0, c.width, c.height);
+
+        ctx.strokeStyle = "rgba(113, 221, 230, 0.85)";
+        ctx.lineWidth = 8;
+        ctx.strokeRect(5, 5, c.width - 10, c.height - 10);
+
+        ctx.fillStyle = "#e7f7f8";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.font = "700 104px system-ui, sans-serif";
+        ctx.fillText(isAction ? "+" : item.asset, c.width / 2, 105);
+
+        ctx.font = "500 34px system-ui, sans-serif";
+        ctx.fillStyle = "rgba(225, 244, 246, 0.78)";
+        ctx.fillText(
+          isAction
+            ? "ADD ASSET"
+            : item.reference_currency + (item.widget ? "  •  WIDGET" : ""),
+          c.width / 2,
+          200
+        );
+
+        const texture = new THREE.CanvasTexture(c);
+        texture.needsUpdate = true;
+        return texture;
+      }
+
+      function createWalletTile(item) {
+        const material = new THREE.MeshBasicMaterial({
+          map: walletTileTexture(item),
+          transparent: true,
+          opacity: 0.96,
+          side: THREE.DoubleSide,
+          depthWrite: false
+        });
+
+        const tile = new THREE.Mesh(
+          new THREE.PlaneGeometry(3.0, 1.5),
+          material
+        );
+
+        tile.userData = Object.assign(
+          { type: "wallet-tile", open: false },
+          item
+        );
+
+        return tile;
+      }
+
+      function walletCreate(value) {
+        const input = normaliseWallet(value);
+        clearWallet();
+
+        const group = new THREE.Group();
+        group.name = "wallet-layer";
+
+        /* First prototype: vertical strip on the LHS. */
+        group.position.set(-16.5, 9.5, -12.0);
+
+        const items = input.assets.map(function (asset) {
+          return Object.assign({ type: "asset" }, asset);
+        });
+
+        items.push({
+          type: "action",
+          action: "add_asset",
+          asset: "+",
+          reference_currency: "",
+          widget: false,
+          sortorder: Number.MAX_SAFE_INTEGER
+        });
+
+        items.forEach(function (item, index) {
+          const tile = createWalletTile(item);
+          tile.position.set(0, -index * 1.85, 0);
+          group.add(tile);
+          walletTiles.push(tile);
+        });
+
+        walletLayer = group;
+        scene.add(walletLayer);
+
+        emitCryptoGraphEvent("WALLET_CREATED", {
+          assets: input.assets.map(function (item) {
+            return item.asset;
+          }),
+          count: input.assets.length
+        });
+      }
+
+      function walletPointerCoordinates(event) {
+        const rect = canvas.getBoundingClientRect();
+
+        walletPointer.x =
+          ((event.clientX - rect.left) / rect.width) * 2 - 1;
+
+        walletPointer.y =
+          -((event.clientY - rect.top) / rect.height) * 2 + 1;
+      }
+
+      function handleWalletPointer(event) {
+        if (!walletLayer || !walletTiles.length) return;
+
+        walletPointerCoordinates(event);
+        walletRaycaster.setFromCamera(walletPointer, camera);
+
+        const hits = walletRaycaster.intersectObjects(walletTiles, false);
+        if (!hits.length) return;
+
+        const tile = hits[0].object;
+        const item = tile.userData;
+
+        if (item.type === "action" && item.action === "add_asset") {
+          emitCryptoGraphEvent("WALLET_ADD_REQUEST", {});
+          return;
+        }
+
+        item.open = !item.open;
+        tile.scale.setScalar(item.open ? 1.10 : 1.0);
+
+		if (item.open) {
+			openAssetDisplay(item.asset);
+		} else {
+			CryptoGraph.command(
+				"CLEAR_ASSET_LAYER"
+			);
+		}
+
+		emitCryptoGraphEvent("WALLET_ASSET_TOGGLE", {
+			asset: item.asset,
+			reference_currency: item.reference_currency,
+			widget: Boolean(item.widget),
+			open: Boolean(item.open)
+		});
+		
+      }
+
+      function clearChannelFrame() {
+        if (!channelFrame) return;
+        scene.remove(channelFrame);
+        disposeObject3D(channelFrame);
+        channelFrame = null;
+      }
+
+      function parseUtcDate(value, fieldName) {
+        const text = String(value || "").trim();
+        const ms = Date.parse(text + "T00:00:00Z");
+        if (!text || Number.isNaN(ms)) {
+          throw new Error(
+            "ADD_CHANNEL_FRAME requires a valid " +
+            fieldName +
+            " date (YYYY-MM-DD)."
+          );
+        }
+        return ms;
+      }
+
+      function finiteNumber(value, fieldName) {
+        const numeric = Number(value);
+        if (!Number.isFinite(numeric)) {
+          throw new Error(
+            "ADD_CHANNEL_FRAME requires numeric " +
+            fieldName +
+            "."
+          );
+        }
+        return numeric;
+      }
+
+      function priceToGraphY(price) {
+        if (!assetPlotState) return null;
+        const normalized =
+          assetPlotState.rawRange > 0
+            ? (price - assetPlotState.minPrice) /
+              assetPlotState.rawRange
+            : 0.5;
+        return assetPlotState.baselineHeight +
+          normalized * assetPlotState.graphHeight;
+      }
+
+      function dateToGraphX(dateMs) {
+        if (!assetPlotState || !Number.isFinite(assetPlotState.firstDateMs)) {
+          return null;
+        }
+        const oneDayMs = 24 * 60 * 60 * 1000;
+        const daysFromStart =
+          (dateMs - assetPlotState.firstDateMs) / oneDayMs;
+        return -assetPlotState.graphWidth / 2 +
+          daysFromStart * assetPlotState.spacing;
+      }
+
+	function addChannelFrame(value) {
+	  if (!assetLayer || !assetPlotState) {
+		console.warn(
+		  "ADD_CHANNEL_FRAME requires an asset layer first."
+		);
+		return;
+	  }
+
+	  if (!value || typeof value !== "object") {
+		console.warn(
+		  "ADD_CHANNEL_FRAME requires an object."
+		);
+		return;
+	  }
+
+	  const rows = Array.isArray(value.data)
+		? value.data
+		: [];
+
+	  if (rows.length < 2) {
+		console.warn(
+		  "ADD_CHANNEL_FRAME requires at least two high/low data rows."
+		);
+		return;
+	  }
+
+	  /*
+		Convert incoming real-world values into graph coordinates.
+
+		Expected input:
+
+		  {
+			colour: "#aaaaaa",
+			data: [
+			  {
+				date: "2026-07-27",
+				high: 0.19,
+				low: 0.15
+			  },
+			  ...
+			]
+		  }
+
+		The rows are sorted by date so callers do not need to guarantee
+		input ordering.
+	  */
+
+	  let channelRows;
+
+	  try {
+		channelRows = rows.map(function (row) {
+		  const dateMs = parseUtcDate(
+			row.date,
+			"channel row date"
+		  );
+
+		  const high = finiteNumber(
+			row.high,
+			"channel row high"
+		  );
+
+		  const low = finiteNumber(
+			row.low,
+			"channel row low"
+		  );
+
+		  if (low > high) {
+			throw new Error(
+			  "ADD_CHANNEL_FRAME row low cannot exceed row high."
+			);
+		  }
+
+		  return {
+			date: String(row.date),
+			dateMs: dateMs,
+			high: high,
+			low: low
+		  };
+		});
+
+	  } catch (error) {
+		console.warn(error.message);
+		return;
+	  }
+
+	  channelRows.sort(function (a, b) {
+		return a.dateMs - b.dateMs;
+	  });
+
+	  clearChannelFrame();
+
+	  const group = new THREE.Group();
+
+	  group.name = "channel-frame";
+
+	  /*
+		Sit slightly in front of the price bars.
+	  */
+
+	  group.position.z =
+		assetPlotState.layerZ + 0.35;
+
+	  const colour =
+	    value.colour ||
+	    value.color ||
+	    "#aaaaaa";
+
+	  const fillOpacity =
+	    Number.isFinite(Number(value.opacity))
+	      ? Math.max(
+	          0,
+	          Math.min(1, Number(value.opacity))
+	        )
+	      : 0.28;
+
+	  const outlineOpacity =
+	    Math.min(1, fillOpacity + 0.45);
+
+	  /*
+		---------------------------------------------------------------
+		Build the outline.
+
+		Clockwise order:
+
+			oldest high
+				↓
+			high → high → high → newest high
+									 ↓
+			oldest low ← low ← low ← newest low
+				↑
+				└──────── close polygon
+
+		---------------------------------------------------------------
+	  */
+
+	  const outlinePoints = [];
+
+	  /*
+		Top edge:
+		oldest date -> newest date
+	  */
+
+	  channelRows.forEach(function (row) {
+		outlinePoints.push(
+		  new THREE.Vector3(
+			dateToGraphX(row.dateMs),
+			priceToGraphY(row.high),
+			0
+		  )
+		);
+	  });
+
+
+	  /*
+		Bottom edge:
+		newest date -> oldest date
+	  */
+
+	  for (
+		let i = channelRows.length - 1;
+		i >= 0;
+		i -= 1
+	  ) {
+		const row = channelRows[i];
+
+		outlinePoints.push(
+		  new THREE.Vector3(
+			dateToGraphX(row.dateMs),
+			priceToGraphY(row.low),
+			0
+		  )
+		);
+	  }
+
+
+	  /*
+		Close the polyline.
+	  */
+
+	  outlinePoints.push(
+		outlinePoints[0].clone()
+	  );
+
+
+	  const outlineGeometry =
+		new THREE.BufferGeometry().setFromPoints(
+		  outlinePoints
+		);
+
+	  const outlineMaterial =
+	    new THREE.LineBasicMaterial({
+	      color: colour,
+	      transparent: true,
+	      opacity: outlineOpacity,
+	      depthWrite: false
+	    });
+  
+	  const outline =
+		new THREE.Line(
+		  outlineGeometry,
+		  outlineMaterial
+		);
+
+	  group.add(outline);
+
+
+	  /*
+		---------------------------------------------------------------
+		Build the semi-transparent interior.
+
+		Each pair of neighbouring dates forms a four-sided strip:
+
+			high[i] -------- high[i+1]
+			   |            /
+			   |          /
+			   |        /
+			low[i] --------- low[i+1]
+
+		Two triangles fill that strip.
+
+		Repeating this for every adjacent pair produces one continuous
+		irregular channel surface.
+		---------------------------------------------------------------
+	  */
+
+	  const fillPositions = [];
+
+	  for (
+		let i = 0;
+		i < channelRows.length - 1;
+		i += 1
+	  ) {
+		const left = channelRows[i];
+		const right = channelRows[i + 1];
+
+		const x1 = dateToGraphX(
+		  left.dateMs
+		);
+
+		const x2 = dateToGraphX(
+		  right.dateMs
+		);
+
+		const high1 = priceToGraphY(
+		  left.high
+		);
+
+		const low1 = priceToGraphY(
+		  left.low
+		);
+
+		const high2 = priceToGraphY(
+		  right.high
+		);
+
+		const low2 = priceToGraphY(
+		  right.low
+		);
+
+
+		/*
+		  Triangle 1
+		*/
+
+		fillPositions.push(
+		  x1, high1, -0.01,
+		  x1, low1,  -0.01,
+		  x2, high2, -0.01
+		);
+
+
+		/*
+		  Triangle 2
+		*/
+
+		fillPositions.push(
+		  x1, low1,  -0.01,
+		  x2, low2,  -0.01,
+		  x2, high2, -0.01
+		);
+	  }
+
+
+	  const fillGeometry =
+		new THREE.BufferGeometry();
+
+	  fillGeometry.setAttribute(
+		"position",
+		new THREE.Float32BufferAttribute(
+		  fillPositions,
+		  3
+		)
+	  );
+
+	  fillGeometry.computeVertexNormals();
+
+	  const fillMaterial =
+	    new THREE.MeshBasicMaterial({
+	      color: colour,
+	      side: THREE.DoubleSide,
+	      transparent: true,
+	      opacity: fillOpacity,
+	      depthWrite: false
+	    });
+  
+	  const fill =
+		new THREE.Mesh(
+		  fillGeometry,
+		  fillMaterial
+		);
+
+	  group.add(fill);
+
+
+	  /*
+		Retain the original values for future inspection,
+		animation, tooltips or analysis.
+	  */
+
+	  group.userData = {
+		type: "channel-frame",
+
+		data: channelRows.map(function (row) {
+		  return {
+			date: row.date,
+			high: row.high,
+			low: row.low
+		  };
+		})
+	  };
+
+
+	  channelFrame = group;
+
+	  scene.add(
+		channelFrame
+	  );
+	}
+
+	function handleCommand(cmd, value) {
+	  const command =
+		String(cmd || "").trim().toUpperCase();
+
+	  switch (command) {
+		case "ADD_ASSET_LAYER":
+		  addAssetLayer(value);
+		  break;
+
+		case "CLEAR_ASSET_LAYER":
+		  clearAssetLayer();
+		  break;
+
+		case "ADD_CHANNEL_FRAME":
+		  addChannelFrame(value);
+		  break;
+
+		case "CLEAR_CHANNEL_FRAME":
+		  clearChannelFrame();
+		  break;
+
+		case "WALLET_CREATE":
+		  walletCreate(value);
+		  break;
+
+		case "CLEAR_WALLET":
+		  clearWallet();
+		  break;
+
+		case "RESET_VIEW":
+		  resetView();
+		  break;
+
+		case "RESET":
+		  clearChannelFrame();
+		  clearAssetLayer();
+		  clearWallet();
+		  resetView();
+		  break;
+
+		default:
+		  console.warn(
+			"Unknown CryptoGraph command:",
+			cmd
+		  );
+	  }
+	}
+
+	window.CryptoGraph = {
+	  command: handleCommand,
+
+	  addAssetLayer(data) {
+		handleCommand(
+		  "ADD_ASSET_LAYER",
+		  data
+		);
+	  },
+
+	  clearAssetLayer() {
+		handleCommand(
+		  "CLEAR_ASSET_LAYER"
+		);
+	  },
+
+	  addChannelFrame(data) {
+		handleCommand(
+		  "ADD_CHANNEL_FRAME",
+		  data
+		);
+	  },
+
+	  clearChannelFrame() {
+		handleCommand(
+		  "CLEAR_CHANNEL_FRAME"
+		);
+	  },
+
+	  resetView() {
+		handleCommand(
+		  "RESET_VIEW"
+		);
+	  },
+
+	  reset() {
+		handleCommand(
+		  "RESET"
+		);
+	  },
+
+	  getState() {
+		return {
+		  assetLoaded: Boolean(assetLayer),
+		  channelLoaded: Boolean(channelFrame),
+
+		  assetName:
+			assetLayer
+			  ? assetLayer.name
+			  : null,
+
+		  camera: {
+			yaw: view.yaw,
+			pitch: view.pitch,
+			distance: view.distance
+		  }
+		};
+	  }
+	};
+
+
+	window.addEventListener(
+	  "message",
+	  function (event) {
+		const data = event.data;
+
+		if (
+		  !data ||
+		  data.type !== "crypto-graph-command"
+		) {
+		  return;
+		}
+
+		handleCommand(
+		  data.command,
+		  data.value
+		);
+	  }
+	);
+
+      function resize() {
+        const width = window.innerWidth;
+        const height = window.innerHeight;
+
+        camera.aspect = width / height;
+        camera.updateProjectionMatrix();
+
+        renderer.setSize(
+          width,
+          height
+        );
+      }
+
+      function animate() {
+        requestAnimationFrame(animate);
+        updateCamera();
+        renderer.render(scene, camera);
+      }
+
+      window.addEventListener(
+        "resize",
+        resize
+      );
+
+      resize();
+      resetView();
+
+      loadWallet();
+
+      emitCryptoGraphEvent("READY", {
+        version: "0.2-wallet-prototype",
+        capabilities: [
+          "WALLET_CREATE",
+          "CLEAR_WALLET",
+          "WALLET_ASSET_TOGGLE",
+          "WALLET_ADD_REQUEST"
+        ]
+      });
+
+      emitCryptoGraphEvent("LOAD_DATA", {
+        requests: ["wallet"]
+      });
+
+
+      animate();
+    })();
+    
+    async function loadWallet() {
+        try {
+            const response = await fetch("/crypto/api/wallet");
+
+            if (!response.ok) {
+                throw new Error(
+                    `Wallet request failed: ${response.status}`
+                );
+            }
+
+            const walletData = await response.json();
+
+            CryptoGraph.command(
+                "WALLET_CREATE",
+                walletData
+            );
+
+        } catch (error) {
+            console.error("Unable to load wallet:", error);
+        }
+    }
+
+	async function openAssetDisplay(asset) {
+		const response =
+			await fetch(
+				`/crypto/api/open/${encodeURIComponent(asset)}`
+			);
+
+		if (!response.ok) {
+			throw new Error(
+				`Unable to open ${asset}: HTTP ${response.status}`
+			);
+		}
+
+		const payload =
+			await response.json();
+
+		if (
+			payload.display &&
+			payload.display.command
+		) {
+			CryptoGraph.command(
+				payload.display.command,
+				payload.display.value
+			);
+		}
+
+		return payload;
+	}
+    
+  </script>
+</body>
+</html>
