@@ -60,16 +60,48 @@ except Exception:
     from config import platform_data_dir
     _content_db = platform_data_dir() / "content.db"
 
+from createentry import create_entry
+from rvpreview import generate_preview_images
+
 from renderhtml import story_markdown_to_html
 
 from remoteviewing import (
      generate_remote_view, 
      save_working_session_to_cms,
      load_working_session, 
-     append_working_session, 
+     append_working_session,
+     write_working_session,
      clear_working_session)
 
+
 CONTENT_DB = _content_db
+
+RVCRYPTO_DIR = Path(__file__).resolve().parent.parent / "rvcrypto"
+
+if str(RVCRYPTO_DIR) not in sys.path:
+    sys.path.insert(0, str(RVCRYPTO_DIR))
+
+import wallet 
+
+CRYPTO_AVAILABLE_LAYERS = [
+    ("actionstatus", "Current trading action and price-zone status.",),
+    ("collecthistory", "Historical daily price data for the asset.",),
+    ("addchannel", "Trading channel definition and channel boundaries.",),
+    ("today", "Current-day trading signal and channel status.",),
+    ("breakdetect", "Detected breaks from the current trading structure.",),
+    ("turndetect", "Detected or developing market turning points.", ),
+    ("estimatetrades", "Estimated trading opportunities remaining in the current channel.",),
+    ("volinfluence", "Volume influence on current price behaviour.", ),
+    ("channelprojection", "Projected price path for the current channel.", ),
+    ("graph", "Standard historical price graph.", ),
+    ("volumespikedetect", "Detected unusual volume spikes.", ),
+    ("channelswing", "Price swings detected within the current channel.", ),
+    ("mmainfluence", "Moving-average influence on current price behaviour.", ),
+    ("channelvolatility","Volatility characteristics of the current channel.", ),
+    ("shapedetect", "Detected historical or projected channel shape.", ),
+    ("whalecheck",  "Investigation of unusual market activity and possible large-participant influence.", ),
+]
+
 
 IMAGE_DIR = Path(os.environ.get("HEICHALOT_IMAGE_DIR", APP_DIR / "images")).expanduser()
 PDF_DIR = Path(os.environ.get("HEICHALOT_PDF_DIR", APP_DIR / "pdfs")).expanduser()
@@ -882,6 +914,23 @@ def entry(entry_id: str):
         related=related,
     )
 
+@app.get("/entry/<entry_id>/image/<filename>")
+def entry_image(entry_id: str, filename: str):
+
+    _cfg, _cfg_path, paths = load_app_config(
+        default_config_path()
+    )
+
+    entry_dir = (
+        paths.cms_dir
+        / Path(entry_id).name
+    )
+
+    return send_from_directory(
+        entry_dir,
+        Path(filename).name,
+    )
+    
 @app.route("/modal/downloadpdf/<entry_id>")
 def modal_downloadpdf(entry_id):
 
@@ -1156,7 +1205,16 @@ def get_remote_view_backend() -> str:
 def remote_view_reset():
     clear_working_session()
     return redirect(url_for("remote_view"))
-    
+
+@app.get("/remote-view/finish")
+def remote_view_finish():
+    conversation = load_working_session()
+
+    return render_template(
+        "remote_view_finish.html",
+        conversation=conversation,
+    )
+        
 @app.post("/remote-view/finish/save")
 def remote_view_finish_save():
     title = request.form.get(
@@ -1176,12 +1234,679 @@ def remote_view_finish_save():
             entry_id=entry_id,
         )
     )
-    
+
 @app.post("/remote-view/finish/discard")
 def remote_view_finish_discard():
     clear_working_session()
     return redirect(url_for("remote_view"))
 
+@app.get("/api/remote-view/session")
+def api_remote_view_session():
+
+    pairs = working_session_pairs()
+
+    return jsonify({
+        "ok": True,
+        "count": len(pairs),
+        "pairs": [
+            {
+                "pair_id": pair["pair_id"],
+                "prompt": pair["prompt"],
+                "response": pair["response"],
+            }
+            for pair in pairs
+        ],
+    })
+
+@app.post("/api/remote-view/session")
+def api_remote_view_session_save():
+
+    data = request.get_json(
+        silent=True
+    ) or {}
+
+    title = str(
+        data.get("title", "")
+    ).strip()
+
+    entry_type = str(
+        data.get("type", "rv")
+    ).strip() or "rv"
+
+    tags = str(
+        data.get("tags", "")
+    ).strip()
+
+    location = str(
+        data.get("location", "")
+    ).strip()
+
+    images = data.get("images", []) or []
+    if not isinstance(images, list):
+        return jsonify({"ok": False, "error": "Invalid image list."}), 400
+
+    images = [str(value).strip() for value in images if str(value).strip()]
+
+    primary_image = images[0] if images else None
+    additional_images = images[1:] if len(images) > 1 else []
+
+    selected = data.get(
+        "selected",
+        [],
+    )
+
+    if not title:
+        return jsonify({
+            "ok": False,
+            "error": "A story title is required.",
+        }), 400
+
+    try:
+        pair_ids = [
+            int(value)
+            for value in selected
+        ]
+    except (TypeError, ValueError):
+        return jsonify({
+            "ok": False,
+            "error": "Invalid session selection.",
+        }), 400
+
+    if not pair_ids:
+        return jsonify({
+            "ok": False,
+            "error": "Select at least one prompt/response pair.",
+        }), 400
+
+    fields = {
+        "title": title,
+    }
+
+    if tags:
+        fields["tags"] = tags
+
+    if location:
+        fields["location_text"] = location
+
+    try:
+        entry_id, story_path = (
+            save_selected_working_session_to_cms(
+                pair_ids,
+                fields=fields,
+                entry_type=entry_type,
+                image=primary_image,
+                images=additional_images,
+            )
+        )
+        
+        #
+        # Refresh the local SQLite view of the CMS.
+        # The filesystem is authoritative; the database is the local server index.
+        #
+        load_local_entries()
+
+    except ValueError as exc:
+        return jsonify({
+            "ok": False,
+            "error": str(exc),
+        }), 400
+
+    return jsonify({
+        "ok": True,
+        "entry_id": entry_id,
+        "story_path": str(story_path),
+        "remaining": len(
+            working_session_pairs()
+        ),
+    })
+
+@app.post("/api/remote-view/preview")
+def api_remote_view_preview():
+    data = request.get_json(silent=True) or {}
+    prompt = str(data.get("prompt", "")).strip()
+
+    if not prompt:
+        return jsonify({"ok": False, "error": "A preview prompt is required."}), 400
+
+    try:
+        count = int(data.get("count", 1))
+    except (TypeError, ValueError):
+        count = 1
+
+    count = max(1, min(count, 4))
+
+    try:
+        _cfg, _cfg_path, paths = load_app_config(setup_if_missing=False)
+        output_dir = paths.cache_dir / "rvpreview"
+        generated = generate_preview_images(
+            prompt=prompt,
+            output_dir=output_dir,
+            count=count,
+            api="pollinations",
+        )
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+    return jsonify({
+        "ok": True,
+        "images": [str(path) for path in generated],
+    })
+
+
+def working_session_pairs(
+    conversation: list[dict] | None = None,
+) -> list[dict]:
+    """
+    Convert the working session into prompt/response pairs.
+
+    pair_id is temporary and refers to the current working-session.json.
+    message_indexes identifies the original records so selected pairs can
+    later be removed safely.
+    """
+
+    if conversation is None:
+        conversation = load_working_session()
+
+    pairs = []
+    pending_prompt = None
+    pending_index = None
+
+    human_roles = {
+        "human",
+        "user",
+        "narrator",
+    }
+
+    ai_roles = {
+        "ai",
+        "assistant",
+    }
+
+    for index, message in enumerate(conversation):
+        role = str(
+            message.get("role", "")
+        ).strip().casefold()
+
+        content = str(
+            message.get("content", "")
+        ).strip()
+
+        if not content:
+            continue
+
+        if role in human_roles:
+            pending_prompt = content
+            pending_index = index
+            continue
+
+        if role in ai_roles and pending_prompt is not None:
+            pairs.append({
+                "pair_id": len(pairs),
+                "prompt": pending_prompt,
+                "response": content,
+                "message_indexes": [
+                    pending_index,
+                    index,
+                ],
+            })
+
+            pending_prompt = None
+            pending_index = None
+
+    return pairs
+
+def save_selected_working_session_to_cms(
+    pair_ids: list[int],
+    fields: dict | None = None,
+    entry_type: str = "rv",
+    *,
+    image: str | Path | None = None,
+    images: list[str | Path] | None = None,
+) -> tuple[str, Path]:
+     
+    """
+    Save selected prompt/response pairs into a new CMS entry and remove
+    those pairs from working-session.json.
+    """
+
+    conversation = load_working_session()
+
+    if not conversation:
+        raise ValueError(
+            "There is no working remote-viewing session"
+        )
+
+    pairs = working_session_pairs(conversation)
+
+    wanted = set(pair_ids)
+
+    selected_pairs = [
+        pair
+        for pair in pairs
+        if pair["pair_id"] in wanted
+    ]
+
+    if not selected_pairs:
+        raise ValueError(
+            "No remote-viewing items were selected"
+        )
+
+    selected_indexes = set()
+    selected_conversation = []
+
+    for pair in selected_pairs:
+        for index in pair["message_indexes"]:
+            selected_indexes.add(index)
+            selected_conversation.append(
+                conversation[index]
+            )
+
+    entry_fields = dict(fields or {})
+
+    entry_id, _entry_dir, story_path = create_entry(
+        entry_type,
+        fields=entry_fields,
+        conversation=selected_conversation,
+        image=image,
+        images=images,
+    )
+
+    remaining = [
+        message
+        for index, message in enumerate(conversation)
+        if index not in selected_indexes
+    ]
+
+    write_working_session(remaining)
+
+    return entry_id, story_path
+
+@app.get("/api/remote-view/preview-image/<filename>")
+def api_remote_view_preview_image(filename: str):
+
+    _cfg, _cfg_path, paths = load_app_config(
+        default_config_path()
+    )
+
+    preview_dir = (
+        paths.cache_dir
+        / "rvpreview"
+    )
+
+    return send_from_directory(
+        preview_dir,
+        Path(filename).name,
+    )
+                
+@app.route("/crypto")
+def crypto():
+    return render_template("crypto.html")
+    
+@app.route("/crypto/api/wallet")
+def crypto_api_wallet():
+    return jsonify(wallet.make_data())
+
+@app.route(
+    "/crypto/api/wallet/add",
+    methods=["POST"],
+)
+def crypto_api_wallet_add():
+
+    payload = request.get_json(
+        silent=True
+    ) or {}
+
+    asset = str(
+        payload.get("asset", "")
+    ).strip().upper()
+
+    if not asset:
+        return jsonify({
+            "error": "asset is required"
+        }), 400
+
+    config = wallet.load_config()
+
+    wallet.add_asset(
+        config=config,
+        asset=asset,
+    )
+
+    return jsonify(
+        wallet.make_data(config)
+    )
+
+CRYPTO_DEFAULT_DAYS = 14
+
+def crypto_data_dir():
+    config = wallet.load_config()
+    return wallet.get_data_dir(config)
+
+
+def crypto_wallet_asset(asset):
+    """
+    Return canonical wallet entry for ASSET.
+    """
+    asset = asset.strip().upper()
+
+    data = wallet.make_data()
+
+    for item in data.get("assets", []):
+        if item.get("asset", "").upper() == asset:
+            return item
+
+    return None
+
+
+def crypto_load_history(asset, reference_currency):
+    """
+    Load canonical collecthistory.py data.
+    """
+    asset = asset.upper()
+    reference_currency = reference_currency.upper()
+
+    path = (
+        crypto_data_dir()
+        / f"{asset}_{reference_currency}.json"
+    )
+
+    if not path.exists():
+        raise FileNotFoundError(
+            f"No history exists for {asset}/{reference_currency}"
+        )
+
+    with path.open("r", encoding="utf-8") as f:
+        document = json.load(f)
+
+    rows = document.get("data", [])
+
+    if not isinstance(rows, list):
+        raise ValueError(
+            f"{path} has no valid data array"
+        )
+
+    rows = [
+        row
+        for row in rows
+        if isinstance(row, dict)
+        and row.get("date")
+    ]
+
+    rows.sort(
+        key=lambda row: row["date"]
+    )
+
+    return document, rows
+
+
+def crypto_active_channel(asset):
+    """
+    Look for the latest channel for ASSET which has no close/end date.
+
+    This is intentionally tolerant because the channel schema is still
+    developing.
+    """
+    asset = asset.strip().upper()
+
+    path = (
+        crypto_data_dir()
+        / "tradingchannels.json"
+    )
+
+    if not path.exists():
+        return None
+
+    with path.open("r", encoding="utf-8") as f:
+        document = json.load(f)
+
+    channels = document.get(
+        "channels",
+        []
+    )
+
+    candidates = []
+
+    for channel in channels:
+
+        if not isinstance(channel, dict):
+            continue
+
+        if (
+            str(channel.get("asset", "")).upper()
+            != asset
+        ):
+            continue
+
+        # Accept the likely names while the channel schema settles.
+        end_date = (
+            channel.get("end_date")
+            or channel.get("close_date")
+            or channel.get("closed")
+        )
+
+        if end_date:
+            continue
+
+        start_date = (
+            channel.get("start_date")
+            or channel.get("open_date")
+        )
+
+        if not start_date:
+            continue
+
+        candidates.append(channel)
+
+    if not candidates:
+        return None
+
+    candidates.sort(
+        key=lambda item: (
+            item.get("start_date")
+            or item.get("open_date")
+            or ""
+        )
+    )
+
+    return candidates[-1]
+
+
+def crypto_open_dataset(
+    asset,
+    fallback_days=CRYPTO_DEFAULT_DAYS,
+):
+    """
+    Build the basic dataset needed when an asset tile is opened.
+
+    Preference:
+        ACTIVE channel
+        otherwise latest 14 daily records
+    """
+    asset = asset.strip().upper()
+
+    wallet_asset = crypto_wallet_asset(
+        asset
+    )
+
+    if wallet_asset is None:
+        raise ValueError(
+            f"{asset} is not in the wallet"
+        )
+
+    reference = wallet_asset.get(
+        "reference_currency",
+        "USDT",
+    ).upper()
+
+    document, history = (
+        crypto_load_history(
+            asset,
+            reference,
+        )
+    )
+
+    active_channel = (
+        crypto_active_channel(asset)
+    )
+
+    if active_channel:
+
+        start_date = (
+            active_channel.get("start_date")
+            or active_channel.get("open_date")
+        )
+
+        selected = [
+            row
+            for row in history
+            if row["date"] >= start_date
+        ]
+
+        window = {
+            "mode": "ACTIVE",
+            "start_date": start_date,
+            "end_date": (
+                selected[-1]["date"]
+                if selected
+                else None
+            ),
+        }
+
+    else:
+
+        selected = history[
+            -fallback_days:
+        ]
+
+        window = {
+            "mode": "RECENT",
+            "days": fallback_days,
+            "start_date": (
+                selected[0]["date"]
+                if selected
+                else None
+            ),
+            "end_date": (
+                selected[-1]["date"]
+                if selected
+                else None
+            ),
+        }
+
+    return {
+        "schema": "rvcrypto.open.v1",
+
+        "asset": asset,
+
+        "reference_currency":
+            reference,
+
+        "window": window,
+
+        "active_channel":
+            active_channel,
+            
+        "available_layers": [
+            {
+                "name": name,
+                "description": description,
+            }
+            for name, description
+            in CRYPTO_AVAILABLE_LAYERS
+        ],            
+
+        "history": selected,
+        
+        "display": {
+                    "command": "ADD_ASSET_LAYER",
+                    "value": {
+                        "asset": asset,
+                        "reference_currency": reference,
+
+                        "data": [
+                            {
+                                "date": row["date"],
+                                "close": row["close"],
+                            }
+                            for row in selected
+                        ],
+                    },
+        },
+        
+    }
+                
+@app.route(
+    "/crypto/api/wallet/remove/<asset>",
+    methods=["POST"],
+)
+def crypto_api_wallet_remove(asset):
+
+    config = wallet.load_config()
+
+    wallet.remove_asset(
+        config=config,
+        asset=asset,
+    )
+
+    return jsonify(
+        wallet.make_data(config)
+    )
+
+
+@app.route(
+    "/crypto/api/wallet/update-history",
+    methods=["POST"],
+)
+def crypto_api_wallet_update_history():
+
+    config = wallet.load_config()
+
+    wallet.update_history(
+        config
+    )
+
+    return jsonify({
+        "ok": True,
+        "wallet": wallet.make_data(config),
+    })
+
+
+@app.route(
+    "/crypto/api/channel/<asset>"
+)
+def crypto_api_channel(asset):
+
+    channel = crypto_active_channel(
+        asset
+    )
+
+    return jsonify({
+        "asset": asset.upper(),
+        "active": channel is not None,
+        "channel": channel,
+    })
+
+
+@app.route(
+    "/crypto/api/open/<asset>"
+)
+def crypto_api_open(asset):
+
+    try:
+        return jsonify(
+            crypto_open_dataset(asset)
+        )
+
+    except (
+        FileNotFoundError,
+        ValueError,
+        json.JSONDecodeError,
+    ) as exc:
+
+        return jsonify({
+            "error": str(exc)
+        }), 404
+                        
 @app.get("/api/llm-status")
 def api_llm_status():
     llm = detect_llm_system()
@@ -1327,22 +2052,16 @@ def load_local_entries() -> None:
     try:
         conn.execute("BEGIN")
 
+        local_rows = []
+
         conn.execute(
             """
             DELETE FROM entries
-            WHERE entry_id GLOB 'entry-[0-9]*'
-              AND CAST(SUBSTR(entry_id, 7) AS INTEGER) < ?
             """,
-            (LOCAL_ENTRY_LIMIT,),
         )
-
-        local_rows = []
 
         for row in rows:
             number = entry_number(row.get("entry_id", ""))
-
-            if number is None or number >= LOCAL_ENTRY_LIMIT:
-                continue
 
             local_rows.append(row)
 
