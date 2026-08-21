@@ -73,7 +73,7 @@ The project emphasizes **clarity and reproducibility over technical complexity**
 git clone https://github.com/DavidLyon66/Heichalot-CMS.git
 cd Heichalot-CMS
 python3 -m pip install -r src/requirements.txt
-heichalot-config --setup
+python3 tools/config.py --setup
 ```
 
 The config setup will prompt for your CMS content directory (default: `~/Documents/heichalot-cms/cms`).
