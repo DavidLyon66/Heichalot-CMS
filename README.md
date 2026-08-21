@@ -65,7 +65,6 @@ The project emphasizes **clarity and reproducibility over technical complexity**
 
 - Python 3.10+ and pip
 - Node.js 18+ and npm (for video rendering only)
-- Optional: Blender 3.x (for 3D scene tools)
 - Optional: Mosquitto MQTT broker (for LAN AI chat)
 
 ### Setup
@@ -73,7 +72,7 @@ The project emphasizes **clarity and reproducibility over technical complexity**
 ```bash
 git clone https://github.com/DavidLyon66/Heichalot-CMS.git
 cd Heichalot-CMS
-pip install -e .
+python3 -m pip install -r src/requirements.txt
 heichalot-config --setup
 ```
 
@@ -91,20 +90,8 @@ npm install
 ## Usage
 
 ```bash
-# List CMS entries
-heichalot-ls
-
-# Search entries
-heichalot-search
-
-# Render an entry to PDF
-heichalot-renderpdf <entry-id>
-
-# Render an entry to HTML
-heichalot-renderhtml <entry-id>
-
-# Update content from remote server
-heichalot-update
+# Open the GUI
+python3 src/heichalot-cms.py
 ```
 
 ---
