@@ -275,6 +275,29 @@
       const walletRaycaster = new THREE.Raycaster();
       const walletPointer = new THREE.Vector2();
 
+      /*
+        Proof-of-concept analysis-layer UI.
+
+        The wallet grows down the left side.
+        Analysis buttons grow up the right side, beginning at roughly the
+        same height as the wallet "+" tile.
+
+        For now only TURN is connected. More report buttons can be added
+        later by extending LAYER_BUTTONS.
+      */
+      let layerButtonLayer = null;
+      let layerButtonTiles = [];
+      let reportPanel = null;
+      let currentAsset = null;
+
+      const LAYER_BUTTONS = [
+        { code: "TURN", endpoint: "turndetect" },
+        { code: "TODAY", endpoint: "today" },
+        { code: "ACTN", endpoint: "actionstatus" },
+        { code: "EST", endpoint: "estimatetrades" },
+        { code: "BRK", endpoint: "breakdetect" }
+      ];
+
       let pointerStartX = 0;
       let pointerStartY = 0;
       let pointerMoved = false;
@@ -373,9 +396,435 @@
             value.future_colour ||
             value.futureColor ||
             "#e5e7eb",
-          data: data
+          data: data,
+          displayOptions:
+            value.display_options &&
+            typeof value.display_options === "object"
+              ? value.display_options
+              : {},
+          rollingBacktest:
+            Array.isArray(value.rolling_backtest)
+              ? value.rolling_backtest
+              : []
         };
       }
+
+
+      function addRollingBacktestOverlay(
+        group,
+        input,
+        minPrice,
+        rawRange,
+        graphHeight,
+        graphWidth,
+        baselineHeight,
+        spacing
+      ) {
+        /*
+          Rolling backtest overlay.
+
+          Each historical origin gets a four-step forecast path.
+          The server supplies the step colour:
+
+              UP   -> progressively brighter green
+              DOWN -> progressively brighter blue
+
+          The renderer deliberately does NOT alter the forecast values.
+
+          Opacity falls with forecast distance so the first step is
+          visually strongest and later/less-certain steps fade away.
+        */
+        if (
+          !input.displayOptions ||
+          !input.displayOptions["rolling-backtest"] ||
+          !Array.isArray(input.rollingBacktest) ||
+          !input.rollingBacktest.length
+        ) {
+          return;
+        }
+
+        const datedRows = input.data.filter(function (row) {
+          return !Number.isNaN(
+            Date.parse(row.date + "T00:00:00Z")
+          );
+        });
+
+        if (!datedRows.length) {
+          return;
+        }
+
+        const firstDateMs = Date.parse(
+          datedRows[0].date + "T00:00:00Z"
+        );
+
+        const oneDayMs =
+          24 * 60 * 60 * 1000;
+
+        function localDateToX(dateText) {
+          const dateMs = Date.parse(
+            String(dateText || "") +
+            "T00:00:00Z"
+          );
+
+          if (Number.isNaN(dateMs)) {
+            return null;
+          }
+
+          const daysFromStart =
+            (dateMs - firstDateMs) /
+            oneDayMs;
+
+          return (
+            -graphWidth / 2 +
+            daysFromStart * spacing
+          );
+        }
+
+        function localPriceToY(price) {
+          const numeric =
+            Number(price);
+
+          if (!Number.isFinite(numeric)) {
+            return null;
+          }
+
+          const normalized =
+            rawRange > 0
+              ? (numeric - minPrice) /
+                rawRange
+              : 0.5;
+
+          return (
+            baselineHeight +
+            normalized * graphHeight
+          );
+        }
+
+        const overlay =
+          new THREE.Group();
+
+        overlay.name =
+          "rolling-backtest-overlay";
+
+        /*
+          Slightly in front of the price bars.
+        */
+        overlay.position.z = 0.45;
+
+        input.rollingBacktest.forEach(
+          function (forecast) {
+
+            const originX =
+              localDateToX(
+                forecast.origin_date
+              );
+
+            const originY =
+              localPriceToY(
+                forecast.origin_close
+              );
+
+            if (
+              originX === null ||
+              originY === null
+            ) {
+              return;
+            }
+
+            let previousX = originX;
+            let previousY = originY;
+
+            const points =
+              Array.isArray(forecast.points)
+                ? forecast.points
+                : [];
+
+            points.forEach(
+              function (point, index) {
+
+                const x =
+                  localDateToX(
+                    point.date
+                  );
+
+                const y =
+                  localPriceToY(
+                    point.close
+                  );
+
+                if (
+                  x === null ||
+                  y === null
+                ) {
+                  return;
+                }
+
+                /*
+                  Step 1 is strongest.
+                  Later forecast steps progressively fade.
+
+                  Four steps currently become roughly:
+                      0.72, 0.57, 0.42, 0.27
+                */
+                const opacity =
+                  Math.max(
+                    0.20,
+                    0.72 -
+                    index * 0.15
+                  );
+
+                const geometry =
+                  new THREE.BufferGeometry()
+                    .setFromPoints([
+                      new THREE.Vector3(
+                        previousX,
+                        previousY,
+                        0
+                      ),
+                      new THREE.Vector3(
+                        x,
+                        y,
+                        0
+                      )
+                    ]);
+
+                const material =
+                  new THREE.LineBasicMaterial({
+                    color:
+                      point.colour ||
+                      point.color ||
+                      "#e5e7eb",
+                    transparent: true,
+                    opacity: opacity,
+                    depthWrite: false
+                  });
+
+                const line =
+                  new THREE.Line(
+                    geometry,
+                    material
+                  );
+
+                line.userData = {
+                  type:
+                    "rolling-backtest-segment",
+                  origin_date:
+                    forecast.origin_date,
+                  direction:
+                    forecast.direction,
+                  step:
+                    point.step ||
+                    index + 1,
+                  predicted_date:
+                    point.date,
+                  predicted_close:
+                    point.close
+                };
+
+                overlay.add(line);
+
+                previousX = x;
+                previousY = y;
+              }
+            );
+          }
+        );
+
+        group.add(overlay);
+      }
+
+
+
+      function dateLabelTexture(
+        dateText,
+        showDayLabels,
+        showDayNumbers
+      ) {
+        const c = document.createElement("canvas");
+        c.width = 256;
+        c.height = 160;
+
+        const ctx = c.getContext("2d");
+
+        ctx.clearRect(0, 0, c.width, c.height);
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+
+        const date = new Date(
+          String(dateText || "") +
+          "T00:00:00Z"
+        );
+
+        if (Number.isNaN(date.getTime())) {
+          return null;
+        }
+
+        const weekdayNames = [
+          "SUN", "MON", "TUE", "WED",
+          "THU", "FRI", "SAT"
+        ];
+
+        const weekday =
+          weekdayNames[date.getUTCDay()];
+
+        const dayNumber =
+          String(date.getUTCDate());
+
+        /*
+          Two compact rows:
+              THU
+               23
+
+          Either row can later be suppressed with display_options.
+        */
+        if (showDayLabels) {
+          ctx.font =
+            "600 42px system-ui, sans-serif";
+          ctx.fillStyle =
+            "rgba(215, 226, 230, 0.66)";
+          ctx.fillText(
+            weekday,
+            c.width / 2,
+            48
+          );
+        }
+
+        if (showDayNumbers) {
+          ctx.font =
+            "700 58px system-ui, sans-serif";
+          ctx.fillStyle =
+            "rgba(235, 242, 244, 0.82)";
+          ctx.fillText(
+            dayNumber,
+            c.width / 2,
+            showDayLabels ? 108 : 78
+          );
+        }
+
+        const texture =
+          new THREE.CanvasTexture(c);
+
+        texture.needsUpdate = true;
+        return texture;
+      }
+
+
+      function addDateLabels(
+        group,
+        input,
+        graphWidth,
+        spacing
+      ) {
+        const options =
+          input.displayOptions || {};
+
+        /*
+          Semi-hardcoded defaults for this prototype.
+          Later the server/user can explicitly pass either option false.
+        */
+        const showDayLabels =
+          options.show_day_labels === undefined
+            ? true
+            : Boolean(options.show_day_labels);
+
+        const showDayNumbers =
+          options.show_day_numbers === undefined
+            ? true
+            : Boolean(options.show_day_numbers);
+
+        if (
+          !showDayLabels &&
+          !showDayNumbers
+        ) {
+          return;
+        }
+
+        const labelGroup =
+          new THREE.Group();
+
+        labelGroup.name =
+          "asset-date-labels";
+
+        /*
+          Labels sit just below the zero line and slightly in front
+          of the bars. They remain part of the 3D graph.
+        */
+        labelGroup.position.set(
+          0,
+          -0.72,
+          0.42
+        );
+
+        input.data.forEach(
+          function (row, index) {
+            const texture =
+              dateLabelTexture(
+                row.date,
+                showDayLabels,
+                showDayNumbers
+              );
+
+            if (!texture) {
+              return;
+            }
+
+            const material =
+              new THREE.MeshBasicMaterial({
+                map: texture,
+                transparent: true,
+                opacity: row.future
+                  ? 0.58
+                  : 0.78,
+                side: THREE.DoubleSide,
+                depthWrite: false
+              });
+
+            /*
+              Keep each label narrower than one daily graph slot.
+            */
+            const width =
+              Math.max(
+                0.48,
+                Math.min(
+                  0.78,
+                  spacing * 0.82
+                )
+              );
+
+            const label =
+              new THREE.Mesh(
+                new THREE.PlaneGeometry(
+                  width * 1.5,
+                  0.52 * 1.5
+                ),
+                material
+              );
+
+            const x =
+              input.data.length > 1
+                ? -graphWidth / 2 +
+                  index * spacing
+                : 0;
+
+            label.position.set(
+              x,
+              0,
+              0
+            );
+
+            label.userData = {
+              type: "date-label",
+              date: row.date,
+              future: row.future
+            };
+
+            labelGroup.add(label);
+          }
+        );
+
+        group.add(labelGroup);
+      }
+
 
       function addAssetLayer(value) {
         let input;
@@ -512,6 +961,24 @@
 
           group.add(bar);
         });
+
+        addRollingBacktestOverlay(
+          group,
+          input,
+          minPrice,
+          rawRange,
+          graphHeight,
+          graphWidth,
+          baselineHeight,
+          spacing
+        );
+
+        addDateLabels(
+          group,
+          input,
+          graphWidth,
+          spacing
+        );
 
         const baselineGeometry =
           new THREE.BufferGeometry().setFromPoints([
@@ -748,6 +1215,598 @@
         return tile;
       }
 
+
+      function clearLayerButtons() {
+        if (!layerButtonLayer) return;
+
+        scene.remove(layerButtonLayer);
+        disposeObject3D(layerButtonLayer);
+        layerButtonLayer = null;
+        layerButtonTiles = [];
+      }
+
+
+      function clearReportPanel() {
+        if (!reportPanel) return;
+
+        scene.remove(reportPanel);
+        disposeObject3D(reportPanel);
+        reportPanel = null;
+      }
+
+
+      function layerTileTexture(item) {
+        const c = document.createElement("canvas");
+        c.width = 512;
+        c.height = 256;
+
+        const ctx = c.getContext("2d");
+
+        /*
+          Deliberately plain gunmetal styling for the proof of concept.
+          This is intentionally close to the wallet-tile visual language.
+        */
+        ctx.fillStyle = "rgba(38, 45, 49, 0.96)";
+        ctx.fillRect(0, 0, c.width, c.height);
+
+        ctx.strokeStyle = "rgba(145, 165, 175, 0.82)";
+        ctx.lineWidth = 8;
+        ctx.strokeRect(5, 5, c.width - 10, c.height - 10);
+
+        ctx.fillStyle = "#e7eef1";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.font = "700 96px system-ui, sans-serif";
+        ctx.fillText(item.code, c.width / 2, 112);
+
+        ctx.font = "500 28px system-ui, sans-serif";
+        ctx.fillStyle = "rgba(220, 230, 234, 0.65)";
+        ctx.fillText("REPORT", c.width / 2, 202);
+
+        const texture = new THREE.CanvasTexture(c);
+        texture.needsUpdate = true;
+        return texture;
+      }
+
+
+      function createLayerTile(item) {
+        const material = new THREE.MeshBasicMaterial({
+          map: layerTileTexture(item),
+          transparent: true,
+          opacity: 0.96,
+          side: THREE.DoubleSide,
+          depthWrite: false
+        });
+
+        const tile = new THREE.Mesh(
+          new THREE.PlaneGeometry(3.0, 1.5),
+          material
+        );
+
+        tile.userData = {
+          type: "analysis-layer",
+          code: item.code,
+          endpoint: item.endpoint
+        };
+
+        return tile;
+      }
+
+
+      function createLayerButtons(asset) {
+        clearLayerButtons();
+        clearReportPanel();
+
+        currentAsset = String(asset || "").trim().toUpperCase();
+
+        if (!currentAsset) return;
+
+        const group = new THREE.Group();
+        group.name = "analysis-layer-buttons:" + currentAsset;
+
+        /*
+          Mirror the wallet on the RHS.
+
+          The wallet "+" tile is currently around world Y ~= -5.3.
+          Start there and grow upward.
+        */
+        group.position.set(16.5, -5.3, -12.0);
+
+        LAYER_BUTTONS.forEach(function (item, index) {
+          const tile = createLayerTile(item);
+          tile.position.set(0, index * 1.85, 0);
+          group.add(tile);
+          layerButtonTiles.push(tile);
+        });
+
+        layerButtonLayer = group;
+        scene.add(layerButtonLayer);
+      }
+
+
+      function reportPanelTexture(asset, layer, data) {
+        const c = document.createElement("canvas");
+        c.width = 1400;
+        c.height = 1000;
+
+        const ctx = c.getContext("2d");
+
+        ctx.fillStyle = "rgba(18, 23, 26, 0.88)";
+        ctx.fillRect(0, 0, c.width, c.height);
+
+        ctx.strokeStyle = "rgba(170, 190, 200, 0.78)";
+        ctx.lineWidth = 5;
+        ctx.strokeRect(4, 4, c.width - 8, c.height - 8);
+
+        ctx.fillStyle = "#f0f4f5";
+        ctx.textAlign = "left";
+        ctx.textBaseline = "top";
+        ctx.font = "700 42px monospace";
+        ctx.fillText(
+          asset + " / " + String(layer || "").toUpperCase(),
+          46,
+          36
+        );
+
+        ctx.font = "500 27px monospace";
+        ctx.fillStyle = "rgba(230, 238, 240, 0.88)";
+
+        const raw =
+          typeof data === "string"
+            ? data
+            : JSON.stringify(data, null, 2);
+
+        const sourceLines = raw.split("\n");
+        const lines = [];
+
+        /*
+          Keep long JSON lines readable without implementing a real text
+          widget yet. This is enough for the first report-panel prototype.
+        */
+        sourceLines.forEach(function (sourceLine) {
+          let line = sourceLine;
+
+          while (line.length > 78) {
+            lines.push(line.slice(0, 78));
+            line = "  " + line.slice(78);
+          }
+
+          lines.push(line);
+        });
+
+        const startY = 105;
+        const lineHeight = 31;
+        const maxLines = Math.floor(
+          (c.height - startY - 55) / lineHeight
+        );
+
+        lines.slice(0, maxLines).forEach(function (line, index) {
+          ctx.fillText(
+            line,
+            46,
+            startY + index * lineHeight
+          );
+        });
+
+        if (lines.length > maxLines) {
+          ctx.fillStyle = "rgba(230, 238, 240, 0.60)";
+          ctx.fillText(
+            "...",
+            46,
+            startY + (maxLines - 1) * lineHeight
+          );
+        }
+
+        ctx.font = "500 24px system-ui, sans-serif";
+        ctx.fillStyle = "rgba(220, 230, 234, 0.55)";
+        ctx.fillText(
+          "Click panel or press ESC to close",
+          46,
+          c.height - 42
+        );
+
+        const texture = new THREE.CanvasTexture(c);
+        texture.needsUpdate = true;
+        return texture;
+      }
+
+
+
+      function todayReportPanelTexture(data) {
+        /*
+          TODAY gets one deliberately simple graphical report.
+
+          BUY  -> pale green upward triangle
+          SELL -> pale orange downward triangle
+          HOLD / WAIT / STOP / other -> blue square
+
+          Everything is drawn directly with Canvas2D, so there is no
+          HTML/SVG/browser-rendering dependency in the Three.js path.
+        */
+        const c = document.createElement("canvas");
+        c.width = 1400;
+        c.height = 1000;
+
+        const ctx = c.getContext("2d");
+
+        ctx.fillStyle = "rgba(18, 23, 26, 0.90)";
+        ctx.fillRect(0, 0, c.width, c.height);
+
+        ctx.strokeStyle = "rgba(170, 190, 200, 0.78)";
+        ctx.lineWidth = 5;
+        ctx.strokeRect(4, 4, c.width - 8, c.height - 8);
+
+        const asset = String(data.asset || "");
+        const reference = String(
+          data.reference_currency || ""
+        );
+
+        const action = String(
+          data.action || "HOLD"
+        );
+
+        const actionUpper =
+          action.toUpperCase();
+
+        const message = String(
+          data.message || ""
+        );
+
+        const zone = String(
+          data.price_zone || ""
+        );
+
+        const latest = String(
+          data.latest_data || ""
+        );
+
+        const channel =
+          data.channel &&
+          typeof data.channel === "object"
+            ? data.channel
+            : {};
+
+        const channelDay =
+          channel.day !== undefined
+            ? String(channel.day)
+            : "";
+
+        /*
+          Header
+        */
+        ctx.fillStyle = "#f0f4f5";
+        ctx.textAlign = "left";
+        ctx.textBaseline = "top";
+        ctx.font = "700 42px monospace";
+
+        ctx.fillText(
+          asset + " / TODAY",
+          46,
+          36
+        );
+
+        ctx.font = "500 25px monospace";
+        ctx.fillStyle =
+          "rgba(230, 238, 240, 0.65)";
+
+        ctx.fillText(
+          reference,
+          48,
+          88
+        );
+
+        /*
+          Icon area
+        */
+        const iconX = 250;
+        const iconY = 345;
+        const iconSize = 190;
+
+        if (actionUpper.includes("BUY")) {
+          ctx.fillStyle = "#b9dfc3";
+          ctx.beginPath();
+          ctx.moveTo(
+            iconX,
+            iconY - iconSize / 2
+          );
+          ctx.lineTo(
+            iconX + iconSize / 2,
+            iconY + iconSize / 2
+          );
+          ctx.lineTo(
+            iconX - iconSize / 2,
+            iconY + iconSize / 2
+          );
+          ctx.closePath();
+          ctx.fill();
+
+        } else if (
+          actionUpper.includes("SELL") ||
+          actionUpper === "EXIT"
+        ) {
+          ctx.fillStyle = "#efc08f";
+          ctx.beginPath();
+          ctx.moveTo(
+            iconX - iconSize / 2,
+            iconY - iconSize / 2
+          );
+          ctx.lineTo(
+            iconX + iconSize / 2,
+            iconY - iconSize / 2
+          );
+          ctx.lineTo(
+            iconX,
+            iconY + iconSize / 2
+          );
+          ctx.closePath();
+          ctx.fill();
+
+        } else {
+          ctx.fillStyle = "#8fbddd";
+          ctx.fillRect(
+            iconX - iconSize / 2,
+            iconY - iconSize / 2,
+            iconSize,
+            iconSize
+          );
+        }
+
+        /*
+          Main instruction
+        */
+        ctx.fillStyle = "#f3f6f7";
+        ctx.font =
+          "700 58px system-ui, sans-serif";
+
+        ctx.fillText(
+          action,
+          430,
+          245
+        );
+
+        ctx.font =
+          "500 32px system-ui, sans-serif";
+
+        ctx.fillStyle =
+          "rgba(235, 241, 243, 0.92)";
+
+        /*
+          The TODAY messages are intentionally short.
+          Wrap defensively anyway.
+        */
+        const messageWords =
+          message.split(/\s+/);
+
+        const messageLines = [];
+        let currentLine = "";
+
+        messageWords.forEach(function (word) {
+          const testLine =
+            currentLine
+              ? currentLine + " " + word
+              : word;
+
+          if (
+            ctx.measureText(testLine).width > 820 &&
+            currentLine
+          ) {
+            messageLines.push(currentLine);
+            currentLine = word;
+          } else {
+            currentLine = testLine;
+          }
+        });
+
+        if (currentLine) {
+          messageLines.push(currentLine);
+        }
+
+        messageLines
+          .slice(0, 4)
+          .forEach(function (line, index) {
+            ctx.fillText(
+              line,
+              430,
+              330 + index * 44
+            );
+          });
+
+        /*
+          Compact supporting data
+        */
+        ctx.font = "500 27px monospace";
+        ctx.fillStyle =
+          "rgba(225, 235, 238, 0.72)";
+
+        const details = [
+          "Price zone:  " + zone,
+          "Channel day: " + channelDay,
+          "Latest data: " + latest
+        ];
+
+        details.forEach(
+          function (line, index) {
+            ctx.fillText(
+              line,
+              430,
+              545 + index * 42
+            );
+          }
+        );
+
+        /*
+          Footer
+        */
+        ctx.font =
+          "500 24px system-ui, sans-serif";
+
+        ctx.fillStyle =
+          "rgba(220, 230, 234, 0.55)";
+
+        ctx.fillText(
+          "Click panel or press ESC to close",
+          46,
+          c.height - 42
+        );
+
+        const texture =
+          new THREE.CanvasTexture(c);
+
+        texture.needsUpdate = true;
+
+        return texture;
+      }
+
+
+      function showTodayReportPanel(
+        asset,
+        layer,
+        data
+      ) {
+        clearReportPanel();
+
+        const material =
+          new THREE.MeshBasicMaterial({
+            map: todayReportPanelTexture(
+              data || {}
+            ),
+            transparent: true,
+            opacity: 0.97,
+            side: THREE.DoubleSide,
+            depthWrite: false
+          });
+
+        const panel =
+          new THREE.Mesh(
+            new THREE.PlaneGeometry(
+              15.0,
+              10.7
+            ),
+            material
+          );
+
+        panel.position.set(
+          0,
+          5.5,
+          -10.5
+        );
+
+        panel.userData = {
+          type: "analysis-report-panel",
+          asset: asset,
+          layer: layer,
+          today: true
+        };
+
+        reportPanel = panel;
+        scene.add(reportPanel);
+      }
+
+
+      function showJsonReportPanel(asset, layer, data) {
+        clearReportPanel();
+
+        const material = new THREE.MeshBasicMaterial({
+          map: reportPanelTexture(asset, layer, data),
+          transparent: true,
+          opacity: 0.96,
+          side: THREE.DoubleSide,
+          depthWrite: false
+        });
+
+        /*
+          The chart sits at z=-18. Put this substantially in front of it,
+          but still inside the same Three.js workspace.
+        */
+        const panel = new THREE.Mesh(
+          new THREE.PlaneGeometry(15.0, 10.7),
+          material
+        );
+
+        panel.position.set(0, 5.5, -10.5);
+        panel.userData = {
+          type: "analysis-report-panel",
+          asset: asset,
+          layer: layer
+        };
+
+        reportPanel = panel;
+        scene.add(reportPanel);
+      }
+
+
+      async function openLayerReport(asset, layer) {
+        try {
+          const response = await fetch(
+            "/crypto/api/layer/" +
+            encodeURIComponent(asset) +
+            "/" +
+            encodeURIComponent(layer)
+          );
+
+          if (!response.ok) {
+            throw new Error(
+              "Layer request failed: HTTP " + response.status
+            );
+          }
+
+          const payload = await response.json();
+
+          console.debug(
+            "Crypto analysis layer:",
+            asset,
+            layer,
+            payload
+          );
+
+          /*
+            Apply any graph/display payload returned by the report.
+            For turndetect this redraws the historical bars and adds
+            the future=true projection bars in the configured future colour.
+          */
+          if (
+            payload.display &&
+            payload.display.command
+          ) {
+            CryptoGraph.command(
+              payload.display.command,
+              payload.display.value
+            );
+          }
+
+          /*
+            TODAY has one small graphical Canvas2D renderer.
+            Everything else stays on the proven text-report path.
+          */
+          if (
+            layer === "today" &&
+            payload.json
+          ) {
+            showTodayReportPanel(
+              asset,
+              layer,
+              payload.json
+            );
+          } else {
+            showJsonReportPanel(
+              asset,
+              layer,
+              payload.report || payload.json
+            );
+          }
+
+        } catch (error) {
+          console.error(
+            "Unable to load analysis layer:",
+            error
+          );
+
+          statusDetail.textContent =
+            "Layer error: " + error.message;
+        }
+      }
+
+
       function walletCreate(value) {
         const input = normaliseWallet(value);
         clearWallet();
@@ -800,41 +1859,116 @@
       }
 
       function handleWalletPointer(event) {
-        if (!walletLayer || !walletTiles.length) return;
-
         walletPointerCoordinates(event);
         walletRaycaster.setFromCamera(walletPointer, camera);
 
-        const hits = walletRaycaster.intersectObjects(walletTiles, false);
+        /*
+          Top priority: clicking the floating report panel closes it.
+        */
+        if (reportPanel) {
+          const reportHits =
+            walletRaycaster.intersectObject(
+              reportPanel,
+              false
+            );
+
+          if (reportHits.length) {
+            clearReportPanel();
+            return;
+          }
+        }
+
+        /*
+          Next: analysis/report buttons on the RHS.
+        */
+        if (
+          layerButtonLayer &&
+          layerButtonTiles.length
+        ) {
+          const layerHits =
+            walletRaycaster.intersectObjects(
+              layerButtonTiles,
+              false
+            );
+
+          if (layerHits.length) {
+            const item =
+              layerHits[0].object.userData;
+
+            if (
+              currentAsset &&
+              item.endpoint
+            ) {
+              openLayerReport(
+                currentAsset,
+                item.endpoint
+              );
+            }
+
+            return;
+          }
+        }
+
+        /*
+          Finally: existing wallet controls on the LHS.
+        */
+        if (!walletLayer || !walletTiles.length) {
+          return;
+        }
+
+        const hits =
+          walletRaycaster.intersectObjects(
+            walletTiles,
+            false
+          );
+
         if (!hits.length) return;
 
         const tile = hits[0].object;
         const item = tile.userData;
 
-        if (item.type === "action" && item.action === "add_asset") {
-          emitCryptoGraphEvent("WALLET_ADD_REQUEST", {});
+        if (
+          item.type === "action" &&
+          item.action === "add_asset"
+        ) {
+          emitCryptoGraphEvent(
+            "WALLET_ADD_REQUEST",
+            {}
+          );
           return;
         }
 
         item.open = !item.open;
-        tile.scale.setScalar(item.open ? 1.10 : 1.0);
+        tile.scale.setScalar(
+          item.open ? 1.10 : 1.0
+        );
 
-		if (item.open) {
-			openAssetDisplay(item.asset);
-		} else {
-			CryptoGraph.command(
-				"CLEAR_ASSET_LAYER"
-			);
-		}
+        if (item.open) {
+          openAssetDisplay(item.asset);
+        } else {
+          CryptoGraph.command(
+            "CLEAR_ASSET_LAYER"
+          );
 
-		emitCryptoGraphEvent("WALLET_ASSET_TOGGLE", {
-			asset: item.asset,
-			reference_currency: item.reference_currency,
-			widget: Boolean(item.widget),
-			open: Boolean(item.open)
-		});
-		
+          if (currentAsset === item.asset) {
+            clearLayerButtons();
+            clearReportPanel();
+            currentAsset = null;
+          }
+        }
+
+        emitCryptoGraphEvent(
+          "WALLET_ASSET_TOGGLE",
+          {
+            asset: item.asset,
+            reference_currency:
+              item.reference_currency,
+            widget: Boolean(item.widget),
+            open: Boolean(item.open)
+          }
+        );
       }
+
 
       function clearChannelFrame() {
         if (!channelFrame) return;
@@ -1312,6 +2446,18 @@
 		);
 	  },
 
+      createLayerButtons(asset) {
+        createLayerButtons(asset);
+      },
+
+      clearLayerButtons() {
+        clearLayerButtons();
+      },
+
+      clearReportPanel() {
+        clearReportPanel();
+      },
+
 	  reset() {
 		handleCommand(
 		  "RESET"
@@ -1375,6 +2521,15 @@
         updateCamera();
         renderer.render(scene, camera);
       }
+
+      window.addEventListener(
+        "keydown",
+        function (event) {
+          if (event.key === "Escape") {
+            clearReportPanel();
+          }
+        }
+      );
 
       window.addEventListener(
         "resize",
@@ -1450,6 +2605,10 @@
 				payload.display.value
 			);
 		}
+
+        CryptoGraph.createLayerButtons(
+          asset
+        );
 
 		return payload;
 	}
