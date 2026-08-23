@@ -99,7 +99,16 @@ def load_json(path):
 
 
 def find_channel(asset, label=None):
+    active_requested = (
+        label is None
+        or not str(label).strip()
+        or str(label).strip().casefold() == "active"
+    )
+
     if not CHANNEL_FILE.exists():
+        if active_requested:
+            return None
+
         raise FileNotFoundError(
             f"Channel file not found: {CHANNEL_FILE}"
         )
@@ -114,12 +123,6 @@ def find_channel(asset, label=None):
         if str(channel.get("asset", "")).casefold() == asset_key
     ]
 
-    active_requested = (
-        label is None
-        or not str(label).strip()
-        or str(label).strip().casefold() == "active"
-    )
-
     if active_requested:
         matches = [
             channel
@@ -128,9 +131,7 @@ def find_channel(asset, label=None):
         ]
 
         if not matches:
-            raise ValueError(
-                f"No active channel found for {asset}."
-            )
+            return None
 
         if len(matches) > 1:
             raise ValueError(
@@ -373,6 +374,54 @@ def volume_stats(rows):
 
 
 def volume_state(history, channel, before_days, recent_window):
+    if channel is None:
+        recent = volume_stats(
+            history[
+                -min(recent_window, len(history)):
+            ]
+        )
+        whole = volume_stats(history)
+
+        def combined_ratio(a, b):
+            ratios = []
+
+            if b["average"] != 0:
+                ratios.append(
+                    a["average"] / b["average"]
+                )
+
+            if b["median"] != 0:
+                ratios.append(
+                    a["median"] / b["median"]
+                )
+
+            return (
+                statistics.mean(ratios)
+                if ratios
+                else None
+            )
+
+        recent_vs_history = combined_ratio(
+            recent,
+            whole,
+        )
+
+        if recent_vs_history is None:
+            trend = "UNKNOWN"
+        elif recent_vs_history >= 1.25:
+            trend = "RISING"
+        elif recent_vs_history <= 0.75:
+            trend = "FALLING"
+        else:
+            trend = "STABLE"
+
+        return {
+            "whole_vs_pre": None,
+            "recent_vs_pre": None,
+            "recent_vs_channel": recent_vs_history,
+            "trend": trend,
+        }
+
     start_date = channel.get("start_date")
     end_date = channel.get("end_date")
 
@@ -1252,16 +1301,20 @@ def print_report(
     geometry,
     score,
 ):
-    label = channel.get(
-        "label",
-        "(unlabelled)",
-    )
+    if channel is None:
+        label = "(available history)"
+        status = "NO ACTIVE CHANNEL"
+    else:
+        label = channel.get(
+            "label",
+            "(unlabelled)",
+        )
 
-    status = (
-        "ACTIVE"
-        if channel.get("end_date") is None
-        else "HISTORICAL"
-    )
+        status = (
+            "ACTIVE"
+            if channel.get("end_date") is None
+            else "HISTORICAL"
+        )
 
     print(
         f"{asset}/{reference}"
@@ -1534,10 +1587,13 @@ def make_report(
         )
     )
 
-    channel_rows = select_channel_rows(
-        history,
-        channel,
-    )
+    if channel is None:
+        channel_rows = list(history)
+    else:
+        channel_rows = select_channel_rows(
+            history,
+            channel,
+        )
 
     swing = current_swing_state(
         history,
@@ -1566,12 +1622,18 @@ def make_report(
         position_window,
     )
 
-    geometry = channel_end_geometry(
-        channel_rows,
-        peak1_date=peak1,
-        peak2_date=peak2,
-        baseline=baseline,
-    )
+    if channel is None:
+        geometry = {
+            "available": False,
+            "reason": "no active trading channel",
+        }
+    else:
+        geometry = channel_end_geometry(
+            channel_rows,
+            peak1_date=peak1,
+            peak2_date=peak2,
+            baseline=baseline,
+        )
 
     score = score_break(
         swing=swing,
@@ -1613,16 +1675,20 @@ def make_report(
         "report": report_text,
 
         "json": {
-            "channel": {
-                "label": channel.get("label"),
-                "start_date": channel.get("start_date"),
-                "end_date": channel.get("end_date"),
-                "status": (
-                    "ACTIVE"
-                    if channel.get("end_date") is None
-                    else "HISTORICAL"
-                ),
-            },
+            "channel": (
+                {
+                    "label": channel.get("label"),
+                    "start_date": channel.get("start_date"),
+                    "end_date": channel.get("end_date"),
+                    "status": (
+                        "ACTIVE"
+                        if channel.get("end_date") is None
+                        else "HISTORICAL"
+                    ),
+                }
+                if channel is not None
+                else None
+            ),
 
             "swing": swing,
             "volume": volume,

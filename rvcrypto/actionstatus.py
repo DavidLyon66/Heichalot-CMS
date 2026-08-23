@@ -72,6 +72,9 @@ def history(asset,quote,cfg_obj,cutoff=None):
     return rows
 
 def find_channel(asset,target_date):
+    if not CHANNELS.exists():
+        return None
+
     matches=[]
     for c in load(CHANNELS).get("channels",[]):
         if str(c.get("asset","")).upper()!=asset:
@@ -86,6 +89,9 @@ def find_channel(asset,target_date):
     return matches[-1]
 
 def channel_rows(rows,channel):
+    if channel is None:
+        return list(rows)
+
     start=channel["start_date"]
     end=channel.get("end_date")
     return [r for r in rows if r["date"]>=start and (end is None or r["date"]<=end)]
@@ -229,20 +235,6 @@ def analyse(asset, target_date=None):
         target,
     )
 
-    if channel is None:
-        return {
-            "schema": "rvcrypto.actionstatus.v1",
-            "type": "actionstatus",
-            "asset": asset,
-            "reference_currency": quote,
-            "date": target,
-            "channel": None,
-            "action": "IGNORE",
-            "position_pct": None,
-            "zone": None,
-            "status": "IGNORE",
-        }
-
     selected = channel_rows(
         rows,
         channel,
@@ -279,13 +271,8 @@ def analyse(asset, target_date=None):
         f"YOU ARE IN THE {zone_name}"
     )
 
-    return {
-        "schema": "rvcrypto.actionstatus.v1",
-        "type": "actionstatus",
-        "asset": asset,
-        "reference_currency": quote,
-        "date": target,
-        "channel": {
+    channel_data = (
+        {
             "label": channel.get("label"),
             "start_date": channel.get("start_date"),
             "end_date": channel.get("end_date"),
@@ -294,7 +281,23 @@ def analyse(asset, target_date=None):
                 if channel.get("end_date") is None
                 else "HISTORICAL"
             ),
-        },
+        }
+        if channel is not None
+        else {
+            "label": "(available history)",
+            "start_date": selected[0]["date"],
+            "end_date": selected[-1]["date"],
+            "status": "HISTORY",
+        }
+    )
+
+    return {
+        "schema": "rvcrypto.actionstatus.v1",
+        "type": "actionstatus",
+        "asset": asset,
+        "reference_currency": quote,
+        "date": target,
+        "channel": channel_data,
         "action": action,
         "position_pct": position,
         "zone": zone_name,
@@ -306,16 +309,6 @@ def report_text(data):
     """
     Render a compact text report for the floating report panel.
     """
-    if data["channel"] is None:
-        return (
-            f"{data['asset']}/{data['reference_currency']}\n"
-            f"Date:       {data['date']}\n\n"
-            f"ACTION STATUS\n"
-            f"-------------\n"
-            f"IGNORE\n"
-            f"No trading channel is active for this date."
-        )
-
     position = data.get("position_pct")
 
     position_text = (
@@ -325,6 +318,12 @@ def report_text(data):
     )
 
     channel = data["channel"]
+
+    position_label = (
+        "History position"
+        if channel.get("status") == "HISTORY"
+        else "Channel position"
+    )
 
     return (
         f"{data['asset']}/{data['reference_currency']}\n"
@@ -336,7 +335,7 @@ def report_text(data):
         f"ACTION STATUS\n"
         f"-------------\n"
         f"{data['action']}\n\n"
-        f"Channel position: {position_text}\n"
+        f"{position_label}: {position_text}\n"
         f"Price zone:       {data['zone']}\n\n"
         f"{data['status']}"
     )

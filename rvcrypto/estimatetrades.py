@@ -72,8 +72,13 @@ import json
 import statistics
 from datetime import date
 from pathlib import Path
+import sys
 
-from tools import lan
+TOOLS_DIR = Path(__file__).resolve().parents[1] / "tools"
+if str(TOOLS_DIR) not in sys.path:
+    sys.path.insert(0, str(TOOLS_DIR))
+
+import lan
 
 try:
     from jinja2 import Template
@@ -204,6 +209,16 @@ def load_history(config, asset, quote, cutoff=None):
 
 
 def find_channel(asset, label="ACTIVE", as_of=None):
+    active_requested = str(label or "ACTIVE").upper() == "ACTIVE"
+
+    if not CHANNEL_FILE.exists():
+        if active_requested:
+            return None
+
+        raise FileNotFoundError(
+            f"Channel file not found: {CHANNEL_FILE}"
+        )
+
     document = load_json_file(CHANNEL_FILE)
 
     matches = [
@@ -211,8 +226,6 @@ def find_channel(asset, label="ACTIVE", as_of=None):
         for channel in document.get("channels", [])
         if str(channel.get("asset", "")).upper() == asset
     ]
-
-    active_requested = str(label or "ACTIVE").upper() == "ACTIVE"
 
     if active_requested:
         matches = [
@@ -229,6 +242,9 @@ def find_channel(asset, label="ACTIVE", as_of=None):
         ]
 
     if not matches:
+        if active_requested:
+            return None
+
         raise ValueError(
             f'No channel "{label}" found for {asset}.'
         )
@@ -258,6 +274,9 @@ def find_channel(asset, label="ACTIVE", as_of=None):
 
 
 def select_channel_rows(history, channel):
+    if channel is None:
+        return list(history)
+
     start = channel.get("start_date")
     end = channel.get("end_date")
 
@@ -475,18 +494,20 @@ def build_layer_data(
         else best_case * reality_trimfactor
     )
 
-    end_date = (
-        channel.get("end_date")
-        or rows[-1]["date"]
-    )
+    if channel is None:
+        channel_data = {
+            "label": "(available history)",
+            "start_date": rows[0]["date"],
+            "end_date": rows[-1]["date"],
+            "status": "HISTORY",
+        }
+    else:
+        end_date = (
+            channel.get("end_date")
+            or rows[-1]["date"]
+        )
 
-    return {
-        "schema": "rvcrypto.estimatetrades.v1",
-        "type": "estimate_trades",
-        "layer_type": "estimate_trades",
-        "asset": asset,
-        "reference_currency": quote,
-        "channel": {
+        channel_data = {
             "label": channel["_display_label"],
             "start_date": channel["start_date"],
             "end_date": end_date,
@@ -495,7 +516,15 @@ def build_layer_data(
                 if channel["_display_label"] == "ACTIVE"
                 else "HISTORICAL"
             ),
-        },
+        }
+
+    return {
+        "schema": "rvcrypto.estimatetrades.v1",
+        "type": "estimate_trades",
+        "layer_type": "estimate_trades",
+        "asset": asset,
+        "reference_currency": quote,
+        "channel": channel_data,
         "latest_data": rows[-1]["date"],
         "parameters": {
             "default_trades": DEFAULT_TRADES,
@@ -625,7 +654,11 @@ def threejs_payload(data):
                 if data["returns"]["reality_trimmed"] is not None
                 else "an estimated channel return"
             )
-            + f" for {data['asset']} in the current channel"
+            + (
+                f" for {data['asset']} in the current channel"
+                if data["channel"]["status"] == "ACTIVE"
+                else f" for {data['asset']} using available history"
+            )
         ),
         "target_return": data["returns"]["reality_trimmed"],
         "remaining_trades": data["trades"]["remaining"],

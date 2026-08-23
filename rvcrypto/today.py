@@ -6,7 +6,6 @@ from pathlib import Path
 import configparser
 
 import actionstatus
-from tools import lan
 import sys
 
 TOOLS_DIR = Path(__file__).resolve().parents[1] / "tools"
@@ -30,12 +29,26 @@ def load(path):
         return json.load(f)
 
 def active_channel(asset):
-    doc = load(DATA / "tradingchannels.json")
-    found = [c for c in doc.get("channels", [])
-             if str(c.get("asset","")).upper() == asset
-             and not c.get("end_date")]
-    if len(found) != 1:
-        raise ValueError(f"Expected one active channel for {asset}; found {len(found)}")
+    path = DATA / "tradingchannels.json"
+
+    if not path.exists():
+        return None
+
+    doc = load(path)
+    found = [
+        c for c in doc.get("channels", [])
+        if str(c.get("asset", "")).upper() == asset
+        and not c.get("end_date")
+    ]
+
+    if not found:
+        return None
+
+    if len(found) > 1:
+        raise ValueError(
+            f"More than one active channel exists for {asset}."
+        )
+
     return found[0]
 
 def latest_history_date(asset):
@@ -86,22 +99,17 @@ def analyse(asset):
     """
     Run the TODAY analysis and return plain Python data.
 
-    This is the reusable core for CLI, Flask/API, HTML, and future
-    template renderers.
+    A trading channel is optional. If no active channel exists, TODAY
+    uses the full available history and still reports the current
+    price-zone status.
     """
     asset = str(asset).strip().upper()
 
     config = load_config()
     channel = active_channel(asset)
 
-    start = date.fromisoformat(
-        channel["start_date"]
-    )
-
     latest = latest_history_date(asset)
-    day = (latest - start).days
 
-    # Determine current position inside the trading channel.
     c = actionstatus.cfg()
     quote = actionstatus.reference(c)
 
@@ -111,10 +119,25 @@ def analyse(asset):
         c,
     )
 
-    selected = actionstatus.channel_rows(
-        rows,
-        channel,
-    )
+    if channel is None:
+        selected = list(rows)
+        day = None
+    else:
+        start = date.fromisoformat(
+            channel["start_date"]
+        )
+
+        day = (latest - start).days
+
+        selected = actionstatus.channel_rows(
+            rows,
+            channel,
+        )
+
+    if not selected:
+        raise ValueError(
+            f"No history for {asset}/{quote}"
+        )
 
     position = actionstatus.channel_position_pct(
         selected
@@ -124,30 +147,27 @@ def analyse(asset):
         position
     )
 
-    # Extreme/strong price opportunities override the normal
-    # channel-age trading discipline.
     if zone == "EXTREME BUY ZONE":
         action = "STRONG BUY SIGNAL"
-        message = (
-            "Price is in the extreme buy zone. "
-        )
+        message = "Price is in the extreme buy zone. "
 
     elif zone == "STRONG BUY ZONE":
         action = "BUY SIGNAL"
-        message = (
-            "Price is in the strong buy zone. "
-        )
+        message = "Price is in the strong buy zone. "
 
     elif zone == "EXTREME SELL ZONE":
         action = "STRONG SELL SIGNAL"
-        message = (
-            "Price is in the extreme sell zone. "
-        )
+        message = "Price is in the extreme sell zone. "
 
     elif zone == "STRONG SELL ZONE":
         action = "SELL SIGNAL"
+        message = "Price is in the strong sell zone. "
+
+    elif channel is None:
+        action = "HOLD"
         message = (
-            "Price is in the strong sell zone. "
+            "No active trading channel. "
+            "Showing current position from available history."
         )
 
     else:
@@ -162,12 +182,10 @@ def analyse(asset):
         channel,
     )
 
-    return {
-        "schema": "rvcrypto.today.v1",
-        "type": "today",
-        "asset": asset,
-        "reference_currency": quote,
-        "channel": {
+    channel_data = None
+
+    if channel is not None:
+        channel_data = {
             "label": channel.get("label"),
             "start_date": channel.get("start_date"),
             "end_date": channel.get("end_date"),
@@ -179,7 +197,14 @@ def analyse(asset):
             "day": day,
             "hot_window_start": hot_start,
             "hot_window_end": hot_end,
-        },
+        }
+
+    return {
+        "schema": "rvcrypto.today.v1",
+        "type": "today",
+        "asset": asset,
+        "reference_currency": quote,
+        "channel": channel_data,
         "latest_data": latest.isoformat(),
         "position_pct": position,
         "price_zone": zone,
@@ -187,12 +212,22 @@ def analyse(asset):
         "message": message,
     }
 
-
 def report_text(data):
     """
     Render the existing plain-text TODAY report.
     """
     channel = data["channel"]
+
+    if channel is None:
+        return (
+            f"{data['asset']}/{data['reference_currency']}\n"
+            f"Channel:        (available history)\n"
+            f"Latest data:    {data['latest_data']}\n"
+            f"Price zone:     {data['price_zone']}\n"
+            f"\n## TODAY\n\n"
+            f"{data['action']}\n"
+            f"{data['message']}"
+        )
 
     return (
         f"{data['asset']}/{data['reference_currency']}\n"
@@ -207,7 +242,6 @@ def report_text(data):
         f"{data['action']}\n"
         f"{data['message']}"
     )
-
 
 def action_icon_svg(action):
     """
@@ -289,7 +323,11 @@ def report_html(data):
     )
 
     channel_day = html.escape(
-        str(data["channel"]["day"])
+        str(
+            data["channel"]["day"]
+            if data["channel"] is not None
+            else "n/a"
+        )
     )
 
     icon = action_icon_svg(

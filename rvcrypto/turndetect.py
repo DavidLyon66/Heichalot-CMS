@@ -88,7 +88,7 @@ def load_json(path):
 
 def find_channel(asset, label=None):
     if not CHANNEL_FILE.exists():
-        raise FileNotFoundError(f"Channel file not found: {CHANNEL_FILE}")
+        return None
 
     document = load_json(CHANNEL_FILE)
     channels = document.get("channels", [])
@@ -165,22 +165,27 @@ def load_history(path):
 
 
 def select_channel_rows(history, channel):
-    start_date = channel.get("start_date")
-    end_date = channel.get("end_date")
-    if not start_date:
-        raise ValueError("Channel does not contain start_date.")
+    if channel is None:
+        selected = list(history)
+    else:
+        start_date = channel.get("start_date")
+        end_date = channel.get("end_date")
 
-    selected = [
-        row for row in history
-        if row["date"] >= start_date
-        and (end_date is None or row["date"] <= end_date)
-    ]
+        if not start_date:
+            selected = list(history)
+        else:
+            selected = [
+                row for row in history
+                if row["date"] >= start_date
+                and (end_date is None or row["date"] <= end_date)
+            ]
 
     if not selected:
-        raise ValueError("No market data falls inside this channel.")
+        raise ValueError("No market data available.")
+
     return selected
 
-
+    
 def previous_close_map(history):
     result = {}
     previous = None
@@ -308,41 +313,126 @@ def volume_stats(rows):
 
 
 def volume_influence(history, channel, before_days, recent_window):
-    start_date = channel.get("start_date")
-    end_date = channel.get("end_date")
 
-    before_candidates = [r for r in history if r["date"] < start_date]
-    pre_rows = before_candidates[before_days:]
-    channel_rows = [
-        r for r in history
-        if r["date"] >= start_date
-        and (end_date is None or r["date"] <= end_date)
-    ]
+    if channel is None:
+        # No channel bookmark:
+        # analyse all history and use the period immediately
+        # before the recent window as the comparison baseline.
+
+        channel_rows = list(history)
+
+        recent_count = min(
+            recent_window,
+            len(channel_rows),
+        )
+
+        recent = channel_rows[
+            -recent_count:
+        ]
+
+        older = channel_rows[
+            :-recent_count
+        ]
+
+        pre_rows = older[
+            before_days:
+        ]
+
+    else:
+        start_date = channel.get(
+            "start_date"
+        )
+
+        end_date = channel.get(
+            "end_date"
+        )
+
+        before_candidates = [
+            r for r in history
+            if r["date"] < start_date
+        ]
+
+        pre_rows = before_candidates[
+            before_days:
+        ]
+
+        channel_rows = [
+            r for r in history
+            if r["date"] >= start_date
+            and (
+                end_date is None
+                or r["date"] <= end_date
+            )
+        ]
+
+        recent = channel_rows[
+            -min(
+                recent_window,
+                len(channel_rows),
+            ):
+        ]
 
     if not pre_rows or not channel_rows:
-        return {"whole_ratio": None, "recent_ratio": None, "trend": "UNKNOWN"}
+        return {
+            "whole_ratio": None,
+            "recent_ratio": None,
+            "trend": "UNKNOWN",
+        }
 
-    pre = volume_stats(pre_rows)
-    whole = volume_stats(channel_rows)
-    recent = volume_stats(channel_rows[-min(recent_window, len(channel_rows)):])
+    pre = volume_stats(
+        pre_rows
+    )
+
+    whole = volume_stats(
+        channel_rows
+    )
+
+    # For the channel case `recent` was calculated above too.
+    recent_stats = volume_stats(
+        recent
+    )
 
     def combined_ratio(period):
         ratios = []
+
         if pre["average"]:
-            ratios.append(period["average"] / pre["average"])
+            ratios.append(
+                period["average"]
+                / pre["average"]
+            )
+
         if pre["median"]:
-            ratios.append(period["median"] / pre["median"])
-        return statistics.mean(ratios) if ratios else None
+            ratios.append(
+                period["median"]
+                / pre["median"]
+            )
 
-    whole_ratio = combined_ratio(whole)
-    recent_ratio = combined_ratio(recent)
+        return (
+            statistics.mean(ratios)
+            if ratios
+            else None
+        )
 
-    if whole_ratio is None or recent_ratio is None:
+    whole_ratio = combined_ratio(
+        whole
+    )
+
+    recent_ratio = combined_ratio(
+        recent_stats
+    )
+
+    if (
+        whole_ratio is None
+        or recent_ratio is None
+    ):
         trend = "UNKNOWN"
+
     elif recent_ratio >= whole_ratio * 1.25:
         trend = "RISING"
+
     elif recent_ratio <= whole_ratio * 0.75:
         trend = "FALLING"
+
     else:
         trend = "STABLE"
 
@@ -351,7 +441,6 @@ def volume_influence(history, channel, before_days, recent_window):
         "recent_ratio": recent_ratio,
         "trend": trend,
     }
-
 
 def simple_moving_average(values, period):
     result = []
@@ -602,14 +691,41 @@ def print_report(
     ma,
     score,
 ):
-    label = channel.get("label", "(unlabelled)")
-    end_date = channel.get("end_date") or daily_rows[-1]["date"]
-    status = "ACTIVE" if channel.get("end_date") is None else "HISTORICAL"
     latest = daily_rows[-1]
+
+    if channel is None:
+        label = "(available history)"
+        start_date = daily_rows[0]["date"]
+        end_date = daily_rows[-1]["date"]
+        status = "HISTORY"
+    else:
+        label = channel.get(
+            "label",
+            "(unlabelled)",
+        )
+
+        start_date = channel.get(
+            "start_date"
+        ) or daily_rows[0]["date"]
+
+        end_date = (
+            channel.get("end_date")
+            or daily_rows[-1]["date"]
+        )
+
+        status = (
+            "ACTIVE"
+            if channel.get("end_date") is None
+            else "HISTORICAL"
+        )
 
     print(f"{asset}/{reference}")
     print(f"Channel: {label}")
-    print(f"Period:  {channel['start_date']} -> {end_date}  [{status}]")
+    print(
+        f"Period:  "
+        f"{start_date} -> {end_date}  "
+        f"[{status}]"
+    )
     print()
 
     print("CURRENT SWING")
@@ -686,8 +802,7 @@ def print_report(
         "Note: turn influence is an experimental convergence of descriptive "
         "measurements. It does not predict that a reversal will occur."
     )
-
-
+    
 def median_direction_move(daily_rows, direction):
     """
     Return the median close-to-close percentage move for rows
@@ -1091,6 +1206,17 @@ def make_report(
         days=graph_days,
     )
 
+    if rolling_backtest and graph_payload["data"]:
+        visible_start = graph_payload["data"][0]["date"]
+        visible_end = graph_payload["data"][-1]["date"]
+
+        rolling_backtest = [
+            forecast
+            for forecast in rolling_backtest
+            if forecast["origin_date"] >= visible_start
+            and forecast["origin_date"] <= visible_end
+        ]
+    
     graph_payload["display_options"] = options
 
     if rolling_backtest:
@@ -1123,17 +1249,22 @@ def make_report(
         "report": report_text,
 
         "json": {
-            "channel": {
-                "label": channel.get("label"),
-                "start_date": channel.get("start_date"),
-                "end_date": channel.get("end_date"),
-                "status": (
-                    "ACTIVE"
-                    if channel.get("end_date") is None
-                    else "HISTORICAL"
-                ),
-            },
 
+            "channel": (
+                {
+                    "label": channel.get("label"),
+                    "start_date": channel.get("start_date"),
+                    "end_date": channel.get("end_date"),
+                    "status": (
+                        "ACTIVE"
+                        if channel.get("end_date") is None
+                        else "HISTORICAL"
+                    ),
+                }
+                if channel is not None
+                else None
+            ),
+             
             "current_swing": {
                 "direction": current_swing["state"],
                 "start_date": current_swing["start_date"],
