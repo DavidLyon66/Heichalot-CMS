@@ -258,12 +258,14 @@ def find_channel(asset, label=None):
 
         if not matches:
             raise ValueError(
-                f"No active channel found for {asset}."
+                f"No active channel found for {asset}.\n" \
+                f"Please add a channel with addchannel.py"
             )
 
         if len(matches) > 1:
             raise ValueError(
-                f"More than one active channel exists for {asset}."
+                f"More than one active channel exists for {asset}.\n" \
+                 "Please remove one from data/tradingchannels.json"
             )
 
         return matches[0]

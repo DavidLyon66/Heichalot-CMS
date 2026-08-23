@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse, json
+import html
 from datetime import date
 from pathlib import Path
 import configparser
@@ -73,88 +74,335 @@ def rule(asset, channel, day):
         "Wait for the channel to finish."
     )
     
+
+def analyse(asset):
+    """
+    Run the TODAY analysis and return plain Python data.
+
+    This is the reusable core for CLI, Flask/API, HTML, and future
+    template renderers.
+    """
+    asset = str(asset).strip().upper()
+
+    config = load_config()
+    channel = active_channel(asset)
+
+    start = date.fromisoformat(
+        channel["start_date"]
+    )
+
+    latest = latest_history_date(asset)
+    day = (latest - start).days
+
+    # Determine current position inside the trading channel.
+    c = actionstatus.cfg()
+    quote = actionstatus.reference(c)
+
+    rows = actionstatus.history(
+        asset,
+        quote,
+        c,
+    )
+
+    selected = actionstatus.channel_rows(
+        rows,
+        channel,
+    )
+
+    position = actionstatus.channel_position_pct(
+        selected
+    )
+
+    zone = actionstatus.channel_zone(
+        position
+    )
+
+    # Extreme/strong price opportunities override the normal
+    # channel-age trading discipline.
+    if zone == "EXTREME BUY ZONE":
+        action = "STRONG BUY SIGNAL"
+        message = (
+            "Price is in the extreme buy zone. "
+        )
+
+    elif zone == "STRONG BUY ZONE":
+        action = "BUY SIGNAL"
+        message = (
+            "Price is in the strong buy zone. "
+        )
+
+    elif zone == "EXTREME SELL ZONE":
+        action = "STRONG SELL SIGNAL"
+        message = (
+            "Price is in the extreme sell zone. "
+        )
+
+    elif zone == "STRONG SELL ZONE":
+        action = "SELL SIGNAL"
+        message = (
+            "Price is in the strong sell zone. "
+        )
+
+    else:
+        action, message = rule(
+            asset,
+            channel,
+            day,
+        )
+
+    hot_start, hot_end = get_hot_window(
+        asset,
+        channel,
+    )
+
+    return {
+        "schema": "rvcrypto.today.v1",
+        "type": "today",
+        "asset": asset,
+        "reference_currency": quote,
+        "channel": {
+            "label": channel.get("label"),
+            "start_date": channel.get("start_date"),
+            "end_date": channel.get("end_date"),
+            "status": (
+                "ACTIVE"
+                if channel.get("end_date") is None
+                else "HISTORICAL"
+            ),
+            "day": day,
+            "hot_window_start": hot_start,
+            "hot_window_end": hot_end,
+        },
+        "latest_data": latest.isoformat(),
+        "position_pct": position,
+        "price_zone": zone,
+        "action": action,
+        "message": message,
+    }
+
+
+def report_text(data):
+    """
+    Render the existing plain-text TODAY report.
+    """
+    channel = data["channel"]
+
+    return (
+        f"{data['asset']}/{data['reference_currency']}\n"
+        f"Channel start: {channel['start_date']}\n"
+        f"Latest data:   {data['latest_data']}\n"
+        f"Hot window:    days "
+        f"{channel['hot_window_start']}-"
+        f"{channel['hot_window_end']}\n"
+        f"Channel day:   {channel['day']}\n"
+        f"Price zone:    {data['price_zone']}\n"
+        f"\n## TODAY\n\n"
+        f"{data['action']}\n"
+        f"{data['message']}"
+    )
+
+
+def action_icon_svg(action):
+    """
+    Return a tiny inline SVG icon for the current instruction.
+
+    BUY  -> pale green triangle pointing up
+    SELL -> pale orange triangle pointing down
+    HOLD/WAIT/STOP/other -> blue square
+    """
+    action_upper = str(action or "").upper()
+
+    if "BUY" in action_upper:
+        return """
+<svg viewBox="0 0 120 120"
+     width="110" height="110"
+     aria-label="Buy">
+  <polygon
+      points="60,12 108,104 12,104"
+      fill="#b9dfc3" />
+</svg>
+""".strip()
+
+    if (
+        "SELL" in action_upper
+        or action_upper == "EXIT"
+    ):
+        return """
+<svg viewBox="0 0 120 120"
+     width="110" height="110"
+     aria-label="Sell">
+  <polygon
+      points="12,16 108,16 60,108"
+      fill="#efc08f" />
+</svg>
+""".strip()
+
+    return """
+<svg viewBox="0 0 120 120"
+     width="110" height="110"
+     aria-label="Hold">
+  <rect
+      x="18" y="18"
+      width="84" height="84"
+      rx="5"
+      fill="#8fbddd" />
+</svg>
+""".strip()
+
+
+def report_html(data):
+    """
+    Render a deliberately tiny self-contained HTML TODAY card.
+
+    Later this can move into a Jinja2 template without changing
+    make_report() or the Flask endpoint.
+    """
+    asset = html.escape(
+        str(data["asset"])
+    )
+
+    reference = html.escape(
+        str(data["reference_currency"])
+    )
+
+    action = html.escape(
+        str(data["action"])
+    )
+
+    message = html.escape(
+        str(data["message"])
+    )
+
+    zone = html.escape(
+        str(data["price_zone"])
+    )
+
+    latest = html.escape(
+        str(data["latest_data"])
+    )
+
+    channel_day = html.escape(
+        str(data["channel"]["day"])
+    )
+
+    icon = action_icon_svg(
+        data["action"]
+    )
+
+    return f"""
+<div style="
+    font-family:system-ui,sans-serif;
+    color:#eef3f5;
+    background:rgba(18,23,26,0.88);
+    border:1px solid rgba(170,190,200,0.78);
+    border-radius:10px;
+    padding:22px;
+    box-sizing:border-box;
+    width:100%;
+    height:100%;
+">
+  <div style="
+      display:flex;
+      align-items:center;
+      gap:24px;
+  ">
+    <div style="
+        flex:0 0 120px;
+        text-align:center;
+    ">
+      {icon}
+    </div>
+
+    <div style="flex:1;">
+      <div style="
+          font-size:18px;
+          opacity:0.72;
+          margin-bottom:4px;
+      ">
+        {asset} / {reference}
+      </div>
+
+      <div style="
+          font-size:34px;
+          font-weight:700;
+          line-height:1.05;
+          margin-bottom:10px;
+      ">
+        {action}
+      </div>
+
+      <div style="
+          font-size:18px;
+          line-height:1.4;
+          margin-bottom:18px;
+      ">
+        {message}
+      </div>
+
+      <div style="
+          font-family:monospace;
+          font-size:14px;
+          line-height:1.6;
+          opacity:0.72;
+      ">
+        Price zone: {zone}<br>
+        Channel day: {channel_day}<br>
+        Latest data: {latest}
+      </div>
+    </div>
+  </div>
+</div>
+""".strip()
+
+
+def make_report(asset):
+    """
+    Return the standard rvcrypto report envelope.
+    """
+    data = analyse(asset)
+
+    return {
+        "schema": "rvcrypto.report.v1",
+        "type": "today",
+        "asset": data["asset"],
+        "reference_currency":
+            data["reference_currency"],
+
+        "report": report_text(data),
+        "html": report_html(data),
+
+        "json": data,
+
+        # TODAY currently has no graph overlay.
+        "display": None,
+
+        # Reserved for future generated SVG/PNG/etc.
+        "image": None,
+    }
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("asset")
-    ap.add_argument("--stream",action="store_true")
+    ap.add_argument(
+        "--stream",
+        action="store_true",
+    )
+
     args = ap.parse_args()
-    asset = args.asset.upper()
 
     try:
-        config = load_config()
-        channel = active_channel(asset)
-        start = date.fromisoformat(channel["start_date"])
-        latest = latest_history_date(asset)
-        day = (latest - start).days
-        
-        # Determine current position inside the trading channel.
-        c = actionstatus.cfg()
-        quote = actionstatus.reference(c)
-
-        rows = actionstatus.history(
-            asset,
-            quote,
-            c,
+        result = make_report(
+            args.asset
         )
 
-        selected = actionstatus.channel_rows(
-            rows,
-            channel,
-        )
-
-        position = actionstatus.channel_position_pct(
-            selected
-        )
-
-        zone = actionstatus.channel_zone(
-            position
-        )
-
-        # Extreme/strong price opportunities override the normal
-        # channel-age trading discipline.
-        if zone == "EXTREME BUY ZONE":
-            action = "STRONG BUY SIGNAL"
-            message = (
-                "Price is in the extreme buy zone. "
-            )
-
-        elif zone == "STRONG BUY ZONE":
-            action = "BUY SIGNAL"
-            message = (
-                "Price is in the strong buy zone. "
-            )
-
-        elif zone == "EXTREME SELL ZONE":
-            action = "STRONG SELL SIGNAL"
-            message = (
-                "Price is in the extreme sell zone. "
-            )
-
-        elif zone == "STRONG SELL ZONE":
-            action = "SELL SIGNAL"
-            message = (
-                "Price is in the strong sell zone. "
-            )
-
-        else:
-            action, message = rule(asset, channel, day)
-
-        hot_start, hot_end = get_hot_window(asset, channel)
-
-        report = (
-            f"{asset}/{QUOTE}\n"
-            f"Channel start: {start}\n"
-            f"Latest data:   {latest}\n"
-            f"Hot window:    days {hot_start}-{hot_end}\n"
-            f"Channel day:   {day}\n"
-            f"Price zone:    {zone}\n"
-            f"\n## TODAY\n\n"
-            f"{action}\n"
-            f"{message}"
-        )
+        report = result["report"]
+        data = result["json"]
+        action = data["action"]
 
         if args.stream:
-            
+            config = load_config()
+
             lan.stream(
                 report,
                 config=config,
@@ -163,20 +411,25 @@ def main():
                     "topic",
                     fallback="rvcrypto/today",
                 ),
-            )            
-
-            alerts_enabled = config.getboolean(
-                "alerts",
-                "enabled",
-                fallback=True,
             )
 
-            if alerts_enabled and action in {
-                "BUY SIGNAL",
-                "STRONG BUY SIGNAL",
-                "SELL SIGNAL",
-                "STRONG SELL SIGNAL",
-            }:
+            alerts_enabled = (
+                config.getboolean(
+                    "alerts",
+                    "enabled",
+                    fallback=True,
+                )
+            )
+
+            if (
+                alerts_enabled
+                and action in {
+                    "BUY SIGNAL",
+                    "STRONG BUY SIGNAL",
+                    "SELL SIGNAL",
+                    "STRONG SELL SIGNAL",
+                }
+            ):
                 lan.stream(
                     report,
                     config=config,
@@ -185,12 +438,19 @@ def main():
                         "topic",
                         fallback="rvcrypto/alert",
                     ),
-                )            
-            
+                )
+
         else:
             print(report)
-    except (OSError, ValueError, KeyError, json.JSONDecodeError) as e:
+
+    except (
+        OSError,
+        ValueError,
+        KeyError,
+        json.JSONDecodeError,
+    ) as e:
         ap.error(str(e))
+
 
 if __name__ == "__main__":
     main()

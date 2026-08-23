@@ -193,44 +193,224 @@ def classify(rows):
 
     return "HOLD (wait for spike)"
 
-def main():
-    ap=argparse.ArgumentParser()
-    ap.add_argument("asset")
-    ap.add_argument("--date",metavar="YYYY-MM-DD")
-    ap.add_argument("--stream",action="store_true")
-    a=ap.parse_args()
 
-    asset=a.asset.upper()
+def analyse(asset, target_date=None):
+    """
+    Reusable action-status analysis.
+
+    Returns plain Python data and does not print or publish anything.
+    """
+    asset = str(asset).strip().upper()
+
+    c = cfg()
+    quote = reference(c)
+
+    rows = history(
+        asset,
+        quote,
+        c,
+        target_date,
+    )
+
+    target = (
+        target_date
+        or rows[-1]["date"]
+    )
+
+    date.fromisoformat(target)
+
+    channel = find_channel(
+        asset,
+        target,
+    )
+
+    if channel is None:
+        return {
+            "schema": "rvcrypto.actionstatus.v1",
+            "type": "actionstatus",
+            "asset": asset,
+            "reference_currency": quote,
+            "date": target,
+            "channel": None,
+            "action": "IGNORE",
+            "position_pct": None,
+            "zone": None,
+            "status": "IGNORE",
+        }
+
+    selected = channel_rows(
+        rows,
+        channel,
+    )
+
+    if not selected:
+        return {
+            "schema": "rvcrypto.actionstatus.v1",
+            "type": "actionstatus",
+            "asset": asset,
+            "reference_currency": quote,
+            "date": target,
+            "channel": channel,
+            "action": "IGNORE",
+            "position_pct": None,
+            "zone": None,
+            "status": "IGNORE",
+        }
+
+    action = classify(
+        daily(selected)
+    )
+
+    position = channel_position_pct(
+        selected
+    )
+
+    zone_name = channel_zone(
+        position
+    )
+
+    status = (
+        f"{action} - "
+        f"YOU ARE IN THE {zone_name}"
+    )
+
+    return {
+        "schema": "rvcrypto.actionstatus.v1",
+        "type": "actionstatus",
+        "asset": asset,
+        "reference_currency": quote,
+        "date": target,
+        "channel": {
+            "label": channel.get("label"),
+            "start_date": channel.get("start_date"),
+            "end_date": channel.get("end_date"),
+            "status": (
+                "ACTIVE"
+                if channel.get("end_date") is None
+                else "HISTORICAL"
+            ),
+        },
+        "action": action,
+        "position_pct": position,
+        "zone": zone_name,
+        "status": status,
+    }
+
+
+def report_text(data):
+    """
+    Render a compact text report for the floating report panel.
+    """
+    if data["channel"] is None:
+        return (
+            f"{data['asset']}/{data['reference_currency']}\n"
+            f"Date:       {data['date']}\n\n"
+            f"ACTION STATUS\n"
+            f"-------------\n"
+            f"IGNORE\n"
+            f"No trading channel is active for this date."
+        )
+
+    position = data.get("position_pct")
+
+    position_text = (
+        f"{position:.1f}%"
+        if position is not None
+        else "n/a"
+    )
+
+    channel = data["channel"]
+
+    return (
+        f"{data['asset']}/{data['reference_currency']}\n"
+        f"Channel:    {channel.get('label') or '(unlabelled)'}\n"
+        f"Period:     {channel.get('start_date')} -> "
+        f"{channel.get('end_date') or data['date']}  "
+        f"[{channel.get('status')}]\n"
+        f"Date:       {data['date']}\n\n"
+        f"ACTION STATUS\n"
+        f"-------------\n"
+        f"{data['action']}\n\n"
+        f"Channel position: {position_text}\n"
+        f"Price zone:       {data['zone']}\n\n"
+        f"{data['status']}"
+    )
+
+
+def make_report(asset, target_date=None):
+    """
+    Return the standard rvcrypto report envelope.
+    """
+    data = analyse(
+        asset,
+        target_date=target_date,
+    )
+
+    return {
+        "schema": "rvcrypto.report.v1",
+        "type": "actionstatus",
+        "asset": data["asset"],
+        "reference_currency":
+            data["reference_currency"],
+
+        "report": report_text(data),
+
+        "json": data,
+
+        # No graph overlay for actionstatus yet.
+        "display": None,
+
+        "image": None,
+    }
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("asset")
+    ap.add_argument(
+        "--date",
+        metavar="YYYY-MM-DD",
+    )
+    ap.add_argument(
+        "--stream",
+        action="store_true",
+    )
+
+    a = ap.parse_args()
 
     try:
-        c=cfg()
-        quote=reference(c)
-        rows=history(asset,quote,c,a.date)
-        target=a.date or rows[-1]["date"]
-        date.fromisoformat(target)
+        result = make_report(
+            a.asset,
+            target_date=a.date,
+        )
 
-        channel=find_channel(asset,target)
-        if channel is None:
-            status="IGNORE"
-        else:
-            selected=channel_rows(rows,channel)
-
-            if selected:
-                action=classify(daily(selected))
-                position=channel_position_pct(selected)
-                zone_name=channel_zone(position)
-                status=f"{action} - YOU ARE IN THE {zone_name}"
-            else:
-                status="IGNORE"
+        status = result["json"]["status"]
 
         if a.stream:
-            lan.stream(status,config=c,topic="rvcrypto/actionstatus")
+            c = cfg()
+
+            lan.stream(
+                status,
+                config=c,
+                topic="rvcrypto/actionstatus",
+            )
         else:
             print(status)
 
-    except (OSError,ValueError,KeyError,json.JSONDecodeError,statistics.StatisticsError,RuntimeError) as e:
-        print(f"Error: {e}",file=sys.stderr)
+    except (
+        OSError,
+        ValueError,
+        KeyError,
+        json.JSONDecodeError,
+        statistics.StatisticsError,
+        RuntimeError,
+    ) as e:
+        print(
+            f"Error: {e}",
+            file=sys.stderr,
+        )
         sys.exit(1)
+
 
 if __name__=="__main__":
     main()
