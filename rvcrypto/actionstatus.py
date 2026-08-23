@@ -18,8 +18,13 @@ Outputs one of:
 import argparse, configparser, json, statistics, sys
 from datetime import date
 from pathlib import Path
+import sys
 
-from tools import lan
+TOOLS_DIR = Path(__file__).resolve().parents[1] / "tools"
+if str(TOOLS_DIR) not in sys.path:
+    sys.path.insert(0, str(TOOLS_DIR))
+
+import lan
 
 BASE=Path(__file__).resolve().parent
 CONFIG=BASE/"config.ini"
