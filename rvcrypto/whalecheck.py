@@ -34,11 +34,14 @@ Without --stream:
 
 import argparse
 import configparser
-import sys
 from pathlib import Path
+import sys
 
-from tools import lan
+TOOLS_DIR = Path(__file__).resolve().parents[1] / "tools"
+if str(TOOLS_DIR) not in sys.path:
+    sys.path.insert(0, str(TOOLS_DIR))
 
+import lan
 
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_FILE = BASE_DIR / "config.ini"
