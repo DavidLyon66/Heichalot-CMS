@@ -82,6 +82,11 @@ if str(RVCRYPTO_DIR) not in sys.path:
     sys.path.insert(0, str(RVCRYPTO_DIR))
 
 import wallet 
+import turndetect
+import today 
+import actionstatus
+import estimatetrades
+import breakdetect
 
 CRYPTO_AVAILABLE_LAYERS = [
     ("actionstatus", "Current trading action and price-zone status.",),
@@ -1906,7 +1911,88 @@ def crypto_api_open(asset):
         return jsonify({
             "error": str(exc)
         }), 404
-                        
+
+@app.route("/crypto/api/layer/<asset>/turndetect")
+def crypto_api_turndetect(asset):
+    try:
+        return jsonify(
+            turndetect.make_report(
+                asset,
+                trend_count=4,
+                options={
+                    "rolling-backtest": True,
+                },
+            )        
+        )
+
+    except Exception as exc:
+        return jsonify({
+            "error": str(exc),
+            "asset": asset.upper(),
+            "layer": "turndetect",
+        }), 400
+
+
+@app.route("/crypto/api/layer/<asset>/today")
+def crypto_api_today(asset):
+    try:
+        return jsonify(
+            today.make_report(asset)
+        )
+
+    except Exception as exc:
+        return jsonify({
+            "error": str(exc),
+            "asset": asset.upper(),
+            "layer": "today",
+        }), 400
+
+
+@app.route("/crypto/api/layer/<asset>/actionstatus")
+def crypto_api_actionstatus(asset):
+    try:
+        return jsonify(
+            actionstatus.make_report(asset)
+        )
+
+    except Exception as exc:
+        return jsonify({
+            "error": str(exc),
+            "asset": asset.upper(),
+            "layer": "actionstatus",
+        }), 400
+
+
+@app.route("/crypto/api/layer/<asset>/estimatetrades")
+def crypto_api_estimatetrades(asset):
+    try:
+        return jsonify(
+            estimatetrades.make_report(asset)
+        )
+
+    except Exception as exc:
+        return jsonify({
+            "error": str(exc),
+            "asset": asset.upper(),
+            "layer": "estimatetrades",
+        }), 400
+
+
+@app.route("/crypto/api/layer/<asset>/breakdetect")
+def crypto_api_breakdetect(asset):
+    try:
+        return jsonify(
+            breakdetect.make_report(asset)
+        )
+
+    except Exception as exc:
+        return jsonify({
+            "error": str(exc),
+            "asset": asset.upper(),
+            "layer": "breakdetect",
+        }), 400
+
+                                
 @app.get("/api/llm-status")
 def api_llm_status():
     llm = detect_llm_system()
