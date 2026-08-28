@@ -5,6 +5,8 @@ import sys
 from datetime import datetime, timezone
 from collections.abc import Mapping, Sequence
 import shutil
+import re
+import yaml
 
 from rich.console import Console
 from rich.prompt import Confirm
@@ -31,6 +33,253 @@ from config import (
     set_last_id,
     resolve_entry_kind,
 )
+
+
+
+_YAML_TOP_LEVEL_KEY_RE = re.compile(
+    r"^([A-Za-z0-9_-]+)\s*:"
+)
+
+
+def _find_yaml_header_bounds(lines: list[str]) -> tuple[int, int]:
+    """
+    Return (opening_line, closing_line) for YAML frontmatter.
+
+    The story must begin with a normal --- YAML header.
+    """
+
+    if not lines or lines[0].strip() != "---":
+        raise ValueError("story.md does not begin with YAML frontmatter")
+
+    for index in range(1, len(lines)):
+        if lines[index].strip() == "---":
+            return 0, index
+
+    raise ValueError("story.md contains unterminated YAML frontmatter")
+
+
+def _render_yaml_field(key: str, value) -> list[str]:
+    """
+    Render one top-level YAML field using PyYAML.
+
+    Returning lines rather than a complete document makes it possible to
+    update one field without rewriting/reordering the rest of the header.
+    """
+
+    key = str(key).strip()
+
+    if not key:
+        raise ValueError("YAML field name cannot be empty")
+
+    rendered = yaml.safe_dump(
+        {key: value},
+        sort_keys=False,
+        allow_unicode=True,
+        default_flow_style=None,
+    ).rstrip()
+
+    # PyYAML can add an explicit document terminator for some scalar values.
+    rendered_lines = [
+        line
+        for line in rendered.splitlines()
+        if line.strip() != "..."
+    ]
+
+    return rendered_lines
+
+
+def strip_blank_lines_from_yaml_header(
+    story_path: str | Path,
+) -> Path:
+    """
+    Remove blank/whitespace-only lines from inside a story.md YAML header.
+
+    The story body is left untouched.
+    """
+
+    path = Path(story_path).expanduser().resolve()
+    text = path.read_text(encoding="utf-8")
+    lines = text.splitlines()
+
+    start, end = _find_yaml_header_bounds(lines)
+
+    header = [
+        line
+        for line in lines[start + 1:end]
+        if line.strip()
+    ]
+
+    cleaned = "\n".join([
+        "---",
+        *header,
+        "---",
+        *lines[end + 1:],
+    ])
+
+    path.write_text(
+        cleaned.rstrip() + "\n",
+        encoding="utf-8",
+    )
+
+    return path
+
+
+def set_yaml_fields(
+    story_path: str | Path,
+    fields: Mapping,
+    *,
+    strip_blank_lines: bool = True,
+) -> Path:
+    """
+    Add or replace top-level YAML fields in an existing story.md.
+
+    Existing fields keep their position in the header. New fields are added
+    immediately before the closing ---.
+
+    Examples:
+
+        set_yaml_fields(
+            story_path,
+            {
+                "tags": ["Islam", "Baal"],
+                "timeframe": ["past"],
+                "source": "youtube",
+            },
+        )
+
+    This is deliberately a frontmatter utility rather than a template
+    utility, so client programs do not need to know which fields happen to
+    exist in story.md.j2.
+    """
+
+    path = Path(story_path).expanduser().resolve()
+
+    if not fields:
+        if strip_blank_lines:
+            return strip_blank_lines_from_yaml_header(path)
+        return path
+
+    updates = {
+        str(key).strip(): value
+        for key, value in fields.items()
+        if str(key).strip()
+    }
+
+    text = path.read_text(encoding="utf-8")
+    lines = text.splitlines()
+
+    start, end = _find_yaml_header_bounds(lines)
+    header = lines[start + 1:end]
+
+    new_header: list[str] = []
+    written: set[str] = set()
+
+    index = 0
+
+    while index < len(header):
+        line = header[index]
+        match = _YAML_TOP_LEVEL_KEY_RE.match(line)
+
+        if not match:
+            new_header.append(line)
+            index += 1
+            continue
+
+        key = match.group(1)
+
+        if key not in updates:
+            new_header.append(line)
+            index += 1
+            continue
+
+        # Replace this entire top-level YAML field. This also removes any
+        # indented continuation lines belonging to a block list/mapping.
+        new_header.extend(
+            _render_yaml_field(
+                key,
+                updates[key],
+            )
+        )
+        written.add(key)
+        index += 1
+
+        while index < len(header):
+            next_line = header[index]
+
+            # A new non-indented top-level key starts the next field.
+            if _YAML_TOP_LEVEL_KEY_RE.match(next_line):
+                break
+
+            # Preserve comments that are visually attached to the next field
+            # only when they are not indented. Blank lines are discarded later.
+            if next_line and not next_line[0].isspace() and next_line.lstrip().startswith("#"):
+                break
+
+            index += 1
+
+    for key, value in updates.items():
+        if key not in written:
+            new_header.extend(
+                _render_yaml_field(
+                    key,
+                    value,
+                )
+            )
+
+    updated = "\n".join([
+        "---",
+        *new_header,
+        "---",
+        *lines[end + 1:],
+    ])
+
+    path.write_text(
+        updated.rstrip() + "\n",
+        encoding="utf-8",
+    )
+
+    if strip_blank_lines:
+        strip_blank_lines_from_yaml_header(path)
+
+    return path
+
+
+def set_yaml_field(
+    story_path: str | Path,
+    key: str,
+    value,
+    *,
+    strip_blank_lines: bool = True,
+) -> Path:
+    """Convenience wrapper for setting one top-level YAML field."""
+
+    return set_yaml_fields(
+        story_path,
+        {key: value},
+        strip_blank_lines=strip_blank_lines,
+    )
+
+
+def add_yaml_field(
+    story_path: str | Path,
+    key: str,
+    value,
+    *,
+    strip_blank_lines: bool = True,
+) -> Path:
+    """
+    Add one top-level YAML field.
+
+    If the field already exists it is replaced, which makes this safe for
+    repeated importer/client runs.
+    """
+
+    return set_yaml_field(
+        story_path,
+        key,
+        value,
+        strip_blank_lines=strip_blank_lines,
+    )
 
 
 def prompt_if_missing(val: str | None, prompt_text: str) -> str:
@@ -321,6 +570,37 @@ def create_entry(
         story_text,
         encoding="utf-8",
     )
+
+    #
+    # Apply caller-supplied YAML metadata to the finished story.
+    #
+    # Templates are presentation/layout files and may not expose every
+    # metadata field supplied by client programs. Enforce yaml_fields here
+    # so callers do not need to patch story.md themselves.
+    #
+
+    post_yaml_fields = dict(
+        yaml_fields or {}
+    )
+
+    # tags has a dedicated create_entry() argument, so make sure it is also
+    # persisted even when an older story template contains only "tags: []".
+    if tags is not None:
+        post_yaml_fields["tags"] = final_fields.get(
+            "tags",
+            [],
+        )
+
+    if post_yaml_fields:
+        set_yaml_fields(
+            story_path,
+            post_yaml_fields,
+            strip_blank_lines=True,
+        )
+    else:
+        strip_blank_lines_from_yaml_header(
+            story_path
+        )
 
     #
     # Optional Image
@@ -803,7 +1083,15 @@ def main() -> int:
         },
     )
 
-    (entry_dir / "story.md").write_text(story_text, encoding="utf-8")
+    story_path = entry_dir / "story.md"
+    story_path.write_text(
+        story_text,
+        encoding="utf-8",
+    )
+
+    strip_blank_lines_from_yaml_header(
+        story_path
+    )
 
     set_last_id(cfg, next_id_num, cfg_path)
 
