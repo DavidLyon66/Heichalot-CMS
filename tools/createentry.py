@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 from pathlib import Path
 import argparse
 import sys
@@ -75,7 +77,7 @@ def _render_yaml_field(key: str, value) -> list[str]:
         {key: value},
         sort_keys=False,
         allow_unicode=True,
-        default_flow_style=None,
+        default_flow_style=False,
     ).rstrip()
 
     # PyYAML can add an explicit document terminator for some scalar values.
