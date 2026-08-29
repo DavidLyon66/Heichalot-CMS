@@ -948,31 +948,97 @@
 
     <div class="navbar-end gap-2">
 
-      {% if auth_ui_enabled|default(false) %}
+      {#
+        These indicators are intentionally absent when no update is needed.
+        The server can provide cms_updates_available / crypto_updates_available
+        in the common template context.
+      #}
+      {% if cms_updates_available|default(false) %}
+        <button
+          type="button"
+          class="btn btn-sm btn-ghost gap-2"
+          onclick="cms_update_dialog.showModal()"
+          title="CMS content update available">
+          <span class="status status-info"></span>
+          <span class="hidden lg:inline">Update CMS</span>
+        </button>
+      {% endif %}
 
-        {% if current_user %}
+      {% if crypto_updates_available|default(false) %}
+        <button
+          type="button"
+          class="btn btn-sm btn-ghost gap-2"
+          onclick="crypto_update_dialog.showModal()"
+          title="Crypto data update available">
+          <span class="status status-warning"></span>
+          <span class="hidden lg:inline">Update Crypto</span>
+        </button>
+      {% endif %}
 
-          <div class="dropdown dropdown-end">
+      {#
+        The user menu is always available. Settings are local and work without
+        login; account/login actions are added when authentication UI exists.
+      #}
+      <div class="dropdown dropdown-end">
 
-            <div tabindex="0"
-                 role="button"
-                 class="btn btn-ghost">
-              {{ current_user.email }}
-            </div>
+        <div tabindex="0"
+             role="button"
+             class="btn btn-sm btn-ghost gap-2"
+             aria-label="User menu">
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            class="w-5 h-5"
+            aria-hidden="true">
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M20 21a8 8 0 0 0-16 0m8-11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z"/>
+          </svg>
 
-            <ul tabindex="0"
-                class="menu menu-sm dropdown-content
-                       bg-base-200 rounded-box z-[110]
-                       mt-3 w-64 p-2 shadow-xl
-                       border border-base-300">
+          {% if current_user %}
+            <span class="hidden md:inline">{{ current_user.email }}</span>
+          {% else %}
+            <span class="hidden md:inline">Offline</span>
+          {% endif %}
 
-              <li class="menu-title">
-                <span>{{ current_user.access_level|title }} account</span>
-              </li>
+          <svg
+            class="w-3 h-3 opacity-60"
+            viewBox="0 0 12 12"
+            fill="currentColor"
+            aria-hidden="true">
+            <path d="M2 4l4 4 4-4z"/>
+          </svg>
+        </div>
 
+        <ul tabindex="0"
+            class="menu menu-sm dropdown-content
+                   bg-base-200 rounded-box z-[110]
+                   mt-3 w-64 p-2 shadow-xl
+                   border border-base-300">
+
+          {% if current_user %}
+            <li class="menu-title">
+              <span>{{ current_user.access_level|title }} account</span>
+            </li>
+          {% endif %}
+
+          <li>
+            <button
+              type="button"
+              onclick="openSettingsDialog()">
+              Settings
+            </button>
+          </li>
+
+          {% if auth_ui_enabled|default(false) %}
+            {% if current_user %}
               <li>
                 <a href="{{ url_for('account') }}">
-                  Account settings
+                  Account
                 </a>
               </li>
 
@@ -981,26 +1047,24 @@
                   Logout
                 </a>
               </li>
+            {% else %}
+              <li>
+                <a href="{{ url_for('login') }}">
+                  Login
+                </a>
+              </li>
 
-            </ul>
+              <li>
+                <a href="{{ url_for('register') }}">
+                  Register
+                </a>
+              </li>
+            {% endif %}
+          {% endif %}
 
-          </div>
+        </ul>
 
-        {% else %}
-
-          <a href="{{ url_for('login') }}"
-             class="btn btn-ghost">
-            Login
-          </a>
-
-          <a href="{{ url_for('register') }}"
-             class="btn btn-primary">
-            Register
-          </a>
-
-        {% endif %}
-
-      {% endif %}
+      </div>
 
     </div>
 
@@ -1525,6 +1589,201 @@
 
   </div>
 
+  {# ---------------------------------------------------------
+     Application settings. This dialog is deliberately available
+     whether or not the user is logged in. Wire its fields to the
+     config.ini settings API as that API is added.
+     --------------------------------------------------------- #}
+  <dialog id="settings_dialog" class="modal">
+
+    <div class="modal-box max-w-2xl">
+
+      <h3 class="text-lg font-bold">
+        Settings
+      </h3>
+
+      <p class="py-2 text-sm opacity-70">
+        Local Heichalot CMS settings. These settings remain available offline.
+      </p>
+
+      <div class="divider"></div>
+
+      <div id="settings-dialog-content" class="space-y-5">
+
+        <div>
+          <div class="text-sm font-semibold mb-3">Identity</div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <label class="form-control w-full">
+              <div class="label">
+                <span class="label-text">Name</span>
+              </div>
+              <input
+                id="settings-full-name"
+                type="text"
+                class="input input-bordered w-full"
+                placeholder="Full name"
+                autocomplete="name">
+            </label>
+
+            <label class="form-control w-full">
+              <div class="label">
+                <span class="label-text">User ID</span>
+              </div>
+              <input
+                id="settings-user-id"
+                type="text"
+                class="input input-bordered w-full"
+                placeholder="Anonymous alias"
+                autocomplete="username">
+              <div class="label">
+                <span class="label-text-alt opacity-60">
+                  Alias used when online.
+                </span>
+              </div>
+            </label>
+
+            <label class="form-control w-full">
+              <div class="label">
+                <span class="label-text">Email</span>
+              </div>
+              <input
+                id="settings-email"
+                type="email"
+                class="input input-bordered w-full"
+                placeholder="name@example.com"
+                autocomplete="email">
+            </label>
+
+            <label class="form-control w-full">
+              <div class="label">
+                <span class="label-text">Password</span>
+              </div>
+              <input
+                id="settings-password"
+                type="password"
+                class="input input-bordered w-full"
+                placeholder="Password"
+                autocomplete="current-password">
+            </label>
+          </div>
+        </div>
+
+        <div class="divider"></div>
+
+        <label class="form-control w-full">
+          <div class="label">
+            <span class="label-text">UI theme</span>
+          </div>
+
+            <select
+              id="ui-theme-select"
+              class="select select-bordered w-full">
+
+              {#
+                Full DaisyUI theme list retained here for reference.
+
+                Some themes are temporarily disabled because legacy Heichalot CMS
+                colour/style overrides do not yet display correctly with all DaisyUI
+                themes. Re-enable themes as the remaining hard-coded styling is
+                migrated to DaisyUI theme variables.
+
+                Available DaisyUI themes:
+                light, dark, cupcake, bumblebee, emerald, corporate,
+                synthwave, retro, cyberpunk, valentine, halloween,
+                garden, forest, aqua, lofi, pastel, fantasy,
+                wireframe, black, luxury, dracula, cmyk, autumn,
+                business, acid, lemonade, night, coffee, winter,
+                dim, nord, sunset, caramellatte, abyss, silk
+              #}
+
+              {% set daisy_themes = [
+                'dark',
+                'halloween',
+                'forest',
+                'black',
+                'luxury',
+                'dracula',
+                'business',
+                'night',
+                'coffee',
+                'dim',
+                'sunset',
+                'abyss',
+              ] %}
+  
+            {% for theme_name in daisy_themes %}
+              <option
+                value="{{ theme_name }}"
+                {% if theme_name == daisy_theme|default('business') %}selected{% endif %}>
+                {{ theme_name|title }}
+              </option>
+            {% endfor %}
+          </select>
+
+          <div class="label">
+            <span class="label-text-alt opacity-60">
+              Changes apply immediately on this device.
+            </span>
+          </div>
+        </label>
+      </div>
+
+      <div class="modal-action">
+        <button
+          type="button"
+          id="settings-save"
+          class="btn btn-primary">
+          Save
+        </button>
+        <button
+          type="button"
+          class="btn btn-ghost"
+          onclick="settings_dialog.close('cancel')">
+          Cancel
+        </button>
+      </div>
+
+    </div>
+
+    <form method="dialog" class="modal-backdrop">
+      <button>Close</button>
+    </form>
+
+  </dialog>
+
+  {# Placeholder update dialogs. They can be replaced by the real
+     update/progress implementation without changing the navbar. #}
+  <dialog id="cms_update_dialog" class="modal">
+    <div class="modal-box">
+      <h3 class="text-lg font-bold">CMS Update</h3>
+      <p class="py-2 opacity-70">A CMS content update is available.</p>
+      <div class="modal-action">
+        <form method="dialog">
+          <button class="btn">Close</button>
+        </form>
+      </div>
+    </div>
+    <form method="dialog" class="modal-backdrop">
+      <button>Close</button>
+    </form>
+  </dialog>
+
+  <dialog id="crypto_update_dialog" class="modal">
+    <div class="modal-box">
+      <h3 class="text-lg font-bold">Crypto Update</h3>
+      <p class="py-2 opacity-70">A crypto data update is available.</p>
+      <div class="modal-action">
+        <form method="dialog">
+          <button class="btn">Close</button>
+        </form>
+      </div>
+    </div>
+    <form method="dialog" class="modal-backdrop">
+      <button>Close</button>
+    </form>
+  </dialog>
+
 	<dialog id="cms_search_modal" class="modal">
 
 	  <div class="modal-box">
@@ -1603,8 +1862,141 @@
   <div id="modals-here"></div>
 
   <script>
+
+    const uiThemeSelect = document.getElementById("ui-theme-select");
+    const settingsDialog = document.getElementById("settings_dialog");
+    const settingsSave = document.getElementById("settings-save");
+    const settingsFullName = document.getElementById("settings-full-name");
+    const settingsUserId = document.getElementById("settings-user-id");
+    const settingsEmail = document.getElementById("settings-email");
+    const settingsPassword = document.getElementById("settings-password");
+
+    let settingsOriginalTheme = document.documentElement.getAttribute("data-theme") || "business";
+
+    function applyUiTheme(themeName) {
+      const resolved = String(themeName || "business").trim() || "business";
+      document.documentElement.setAttribute("data-theme", resolved);
+      if (uiThemeSelect) {
+        uiThemeSelect.value = resolved;
+      }
+    }
+
+    async function loadLocalSettings() {
+      const response = await fetch("/api/settings", {
+        headers: {"Accept": "application/json"},
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.ok) {
+        throw new Error(data.error || "Unable to load settings");
+      }
+
+      const user = data.user || {};
+      const display = data.display || {};
+
+      if (settingsFullName) settingsFullName.value = user.name || "";
+      if (settingsUserId) settingsUserId.value = user.alias || "";
+      if (settingsEmail) settingsEmail.value = user.email || "";
+
+      // The API deliberately does not return the saved passcode.
+      if (settingsPassword) {
+        settingsPassword.value = "";
+        settingsPassword.placeholder = user.has_passcode
+          ? "Saved password (leave blank to keep)"
+          : "Password";
+      }
+
+      applyUiTheme(display.theme || "business");
+      settingsOriginalTheme = document.documentElement.getAttribute("data-theme") || "business";
+
+      return data;
+    }
+
+    async function openSettingsDialog() {
+      try {
+        await loadLocalSettings();
+        settingsDialog.showModal();
+      } catch (error) {
+        showToast(error.message || "Unable to load settings", "error");
+      }
+    }
+
+    if (uiThemeSelect) {
+      uiThemeSelect.addEventListener("change", function () {
+        applyUiTheme(this.value);
+      });
+    }
+
+    if (settingsSave) {
+      settingsSave.addEventListener("click", async function () {
+        const oldText = settingsSave.textContent;
+        settingsSave.disabled = true;
+        settingsSave.textContent = "Saving...";
+
+        try {
+          const response = await fetch("/api/settings", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Accept": "application/json",
+            },
+            body: JSON.stringify({
+              user: {
+                name: settingsFullName ? settingsFullName.value.trim() : "",
+                alias: settingsUserId ? settingsUserId.value.trim() : "",
+                email: settingsEmail ? settingsEmail.value.trim() : "",
+                passcode: settingsPassword ? settingsPassword.value : "",
+              },
+              display: {
+                theme: uiThemeSelect ? uiThemeSelect.value : "business",
+              },
+            }),
+          });
+
+          const data = await response.json();
+
+          if (!response.ok || !data.ok) {
+            throw new Error(data.error || "Unable to save settings");
+          }
+
+          applyUiTheme(data.display?.theme || uiThemeSelect?.value || "business");
+          settingsOriginalTheme = document.documentElement.getAttribute("data-theme") || "business";
+
+          if (settingsPassword) {
+            settingsPassword.value = "";
+            settingsPassword.placeholder = "Saved password (leave blank to keep)";
+          }
+
+          settingsDialog.close();
+          showToast("Settings saved.");
+        } catch (error) {
+          showToast(error.message || "Unable to save settings", "error");
+        } finally {
+          settingsSave.disabled = false;
+          settingsSave.textContent = oldText;
+        }
+      });
+    }
+
+    if (settingsDialog) {
+      settingsDialog.addEventListener("close", function () {
+        // If the dialog was cancelled after previewing another theme,
+        // restore the last saved theme.
+        if (settingsDialog.returnValue !== "saved") {
+          applyUiTheme(settingsOriginalTheme);
+        }
+      });
+    }
+
+    // Load the saved theme without delaying initial page rendering.
+    window.addEventListener("DOMContentLoaded", function () {
+      loadLocalSettings().catch(function () {
+        // Staying on the template/default theme is fine if settings are unavailable.
+      });
+    });
 	  
-	function showToast(message) {
+	function showToast(message, level = "success") {
 
 		let area = document.getElementById("toast-area");
 
@@ -1619,7 +2011,7 @@
 		}
 
 		const toast = document.createElement("div");
-		toast.className = "alert alert-success shadow-lg";
+		toast.className = `alert ${level === "error" ? "alert-error" : "alert-success"} shadow-lg`;
 
 		const span = document.createElement("span");
 		span.textContent = message;
