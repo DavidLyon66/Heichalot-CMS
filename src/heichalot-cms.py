@@ -366,15 +366,22 @@ def parse_yaml_header(yaml_header: str):
         return {}
 
 
-
 def entry_metadata(entry: dict) -> dict:
     """Cache YAML metadata and normalized fields used by filters."""
+
     data = entry.get("_metadata")
+
     if not isinstance(data, dict):
-        data = parse_yaml_header(entry.get("yaml_header"))
+        data = parse_yaml_header(
+            entry.get("yaml_header")
+        )
         entry["_metadata"] = data
 
-    entry["_tags"] = parse_tags(data.get("tags")) | parse_tags(entry.get("tags"))
+    entry["_tags"] = (
+        parse_tags(data.get("tags"))
+        | parse_tags(entry.get("tags"))
+    )
+
     entry["_kind"] = normalise_filter_value(
         data.get("kind")
         or data.get("type")
@@ -382,9 +389,15 @@ def entry_metadata(entry: dict) -> dict:
         or entry.get("type")
         or ""
     )
+
     entry["_year"] = extract_subject_year(data)
-    entry["_futurist"] = parse_bool(data.get("futurist"))
+
+    entry["_timeframes"] = parse_tags(
+        data.get("timeframe")
+    )
+
     return data
+    
 
 def normalise_location_filter(value: str | None) -> str:
     value = str(value or "").strip().casefold()
@@ -493,35 +506,90 @@ def matches_timeframe_filter(
     *,
     current_year: int | None = None,
 ) -> bool:
-    """Match ancient, past, present, or explicitly marked future entries."""
+
     wanted = normalise_filter_value(timeframe)
+
     if not wanted:
         return True
-    if wanted not in {"ancient", "past", "present", "future"}:
+
+    if wanted not in {
+        "ancient",
+        "past",
+        "present",
+        "future",
+    }:
         return False
 
     entry_metadata(entry)
-    futurist = bool(entry.get("_futurist"))
 
-    if wanted == "future":
-        return futurist
-    if futurist:
-        return False
+    #
+    # Explicit timeframe metadata wins.
+    #
+    explicit = entry.get(
+        "_timeframes",
+        set(),
+    )
 
+    if explicit:
+
+        if wanted not in explicit:
+            return False
+
+        if wanted == "future":
+            year = entry.get("_year")
+
+            if year is None:
+                return True
+
+            current_year = (
+                current_year
+                or datetime.now().year
+            )
+
+            return year >= current_year
+
+        return True
+    
+    #
+    # Legacy fallback: infer timeframe from year.
+    #
     year = entry.get("_year")
+
     if year is None:
         return False
 
-    current_year = current_year or datetime.now().year
+    current_year = (
+        current_year
+        or datetime.now().year
+    )
+
     ancient_cutoff = current_year - 1500
     present_start = current_year - 5
 
     if wanted == "ancient":
         return year <= ancient_cutoff
-    if wanted == "past":
-        return ancient_cutoff < year < present_start
-    return present_start <= year <= current_year
 
+    if wanted == "past":
+        return (
+            ancient_cutoff
+            < year
+            < present_start
+        )
+
+    if wanted == "present":
+        return (
+            present_start
+            <= year
+            <= current_year
+        )
+
+    #
+    # No explicit timeframe metadata means
+    # a year by itself does not imply "future"
+    # unless it is actually greater than now.
+    #
+    return year > current_year
+    
 
 def entry_matches_filters(
     entry: dict,
@@ -885,15 +953,43 @@ def entry(entry_id: str):
         links = parse_links_from_yaml_header(row["yaml_header"])
 
         related = []
+
         for linked_id in links:
+            lookup_id = linked_id
+
+            # A relationship may have been created while the target was still
+            # entry-000xxxx. Published entries live as entry-100xxxx.
+            if linked_id.startswith("entry-") and linked_id[6:].isdigit():
+                number = int(linked_id[6:])
+
+                if number < 1_000_000:
+                    published_id = f"entry-{number + 1_000_000:07d}"
+                else:
+                    published_id = linked_id
+            else:
+                published_id = linked_id
+
+            # Try the ID exactly as stored first.
             r = conn.execute(
                 """
                 SELECT entry_id, title
                 FROM entries
-                WHERE entry_id = ? 
+                WHERE entry_id = ?
                 """,
-                (linked_id,),
+                (lookup_id,),
             ).fetchone()
+
+            # If it isn't there, try its published namespace ID.
+            if not r and published_id != lookup_id:
+                r = conn.execute(
+                    """
+                    SELECT entry_id, title
+                    FROM entries
+                    WHERE entry_id = ?
+                    """,
+                    (published_id,),
+                ).fetchone()
+
             if r:
                 related.append(r)
 
@@ -1047,6 +1143,154 @@ def tag_page(tag):
         min_year=min_year,
         max_year=max_year,
     )
+
+
+@app.route("/api/settings", methods=["GET", "POST"])
+def api_settings():
+
+    cfg, config_path, _paths = load_app_config(
+        default_config_path(),
+        setup_if_missing=True,
+    )
+
+    if request.method == "GET":
+
+        return jsonify({
+            "ok": True,
+
+            "user": {
+                "name": cfg.get(
+                    "user", "name",
+                    fallback="",
+                ),
+                "alias": cfg.get(
+                    "user", "alias",
+                    fallback="",
+                ),
+                "email": cfg.get(
+                    "user", "email",
+                    fallback="",
+                ),
+
+                # Deliberately do not return the saved passcode.
+                "has_passcode": bool(
+                    cfg.get(
+                        "user", "passcode",
+                        fallback="",
+                    )
+                ),
+            },
+
+            "display": {
+                "theme": cfg.get(
+                    "display", "theme",
+                    fallback="business",
+                ),
+            },
+        })
+
+
+    data = request.get_json(silent=True) or {}
+
+    user_data = data.get("user", {}) or {}
+    display_data = data.get("display", {}) or {}
+
+
+    if not cfg.has_section("user"):
+        cfg.add_section("user")
+
+    if not cfg.has_section("display"):
+        cfg.add_section("display")
+
+
+    #
+    # Identity
+    #
+
+    cfg.set(
+        "user",
+        "name",
+        str(user_data.get("name", "")).strip(),
+    )
+
+    cfg.set(
+        "user",
+        "alias",
+        str(user_data.get("alias", "")).strip(),
+    )
+
+    cfg.set(
+        "user",
+        "email",
+        str(user_data.get("email", "")).strip(),
+    )
+
+
+    #
+    # Passcode is special:
+    #
+    # Blank means "leave the existing value alone".
+    # That prevents opening Settings and clicking Save
+    # from accidentally erasing the password.
+    #
+
+    passcode = str(
+        user_data.get("passcode", "")
+    )
+
+    if passcode:
+        cfg.set(
+            "user",
+            "passcode",
+            passcode,
+        )
+
+
+    #
+    # Display
+    #
+
+    theme = str(
+        display_data.get("theme", "business")
+    ).strip().lower()
+
+    # DaisyUI theme names are simple slugs.
+    if not re.fullmatch(r"[a-z0-9_-]+", theme):
+        return jsonify({
+            "ok": False,
+            "error": "Invalid theme name.",
+        }), 400
+
+    cfg.set(
+        "display",
+        "theme",
+        theme,
+    )
+
+
+    #
+    # Save through the normal local configuration path.
+    #
+
+    config_path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    with config_path.open(
+        "w",
+        encoding="utf-8",
+    ) as handle:
+        cfg.write(handle)
+
+
+    return jsonify({
+        "ok": True,
+        "display": {
+            "theme": theme,
+        },
+    })
+
 
 @app.errorhandler(500)
 def internal_server_error(error):
@@ -1857,24 +2101,43 @@ def crypto_api_wallet_remove(asset):
         wallet.make_data(config)
     )
 
+@app.route("/crypto/api/wallet/update-needed")
+def crypto_api_wallet_update_needed():
+    try:
+        return jsonify(
+            wallet.check_update_needed()
+        )
+    except Exception as exc:
+        return jsonify({
+            "error": str(exc),
+        }), 400
+
 
 @app.route(
     "/crypto/api/wallet/update-history",
     methods=["POST"],
 )
+
 def crypto_api_wallet_update_history():
+    try:
+        config = wallet.load_config()
 
-    config = wallet.load_config()
+        wallet.update_history(
+            config
+        )
 
-    wallet.update_history(
-        config
-    )
+        return jsonify({
+            "ok": True,
+            "status": wallet.check_update_needed(
+                config
+            ),
+        })
 
-    return jsonify({
-        "ok": True,
-        "wallet": wallet.make_data(config),
-    })
-
+    except Exception as exc:
+        return jsonify({
+            "error": str(exc),
+        }), 400
+        
 
 @app.route(
     "/crypto/api/channel/<asset>"
