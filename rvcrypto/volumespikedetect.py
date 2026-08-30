@@ -1,407 +1,502 @@
 #!/usr/bin/env python3
-
 """
 volumespikedetect.py
 
-Small experimental utility for recording known/observed crypto
-volume/price spike events.
+Ground truth tool for spike detection.
 
-At this stage the program deliberately does NOT attempt to detect
-spikes automatically.  It records human-observed spike events so that
-later analysis tools have a stable set of historical events to study.
+This tool records human-observed spike events and validates them
+against the automatic detector (spikedetect.py). It answers:
 
-The spike data is kept separately from mechanically collected market
-history.
+    1. What spikes did you observe?
+    2. Did the auto-detector catch them?
+    3. Are there calendar patterns (month-end clustering)?
+    4. How accurate is the auto-detector?
 
-Example market history:
-
-    data/MMT_USDT.json
-
-Example spike observations:
-
-    data/MMT_USDT_spikes.json
+Use this tool to build a labeled dataset of spike events. The labels
+serve as ground truth for validating and tuning spikedetect.py.
 
 
-Examples
---------
+Usage
+-----
 
-Add a spike:
+Add a labeled spike:
 
-    python3 volumespikedetect.py MMT \
-        --add-day-spike 2026-07-31 -5 4
+    python3 volumespikedetect.py MMT \\
+        --add 2026-07-31 --reason "Month-end accounting settlement" \\
+        --magnitude "+83%" --source "manual chart review"
 
-Add a labelled spike:
+Remove a labeled spike:
 
-    python3 volumespikedetect.py MMT \
-        --add-day-spike 2026-07-31 -5 4 \
-        --label "Unknown July Spike"
+    python3 volumespikedetect.py MMT --remove 2026-07-31
 
-Add a description:
-
-    python3 volumespikedetect.py MMT \
-        --add-day-spike 2026-07-31 -5 4 \
-        --label "Unknown July Spike" \
-        --description "We need to remote-view this to find out why"
-
-List recorded spikes:
+List all labeled spikes:
 
     python3 volumespikedetect.py MMT --list
 
-Remove a spike:
+Validate labels against auto-detector:
 
-    python3 volumespikedetect.py MMT \
-        --remove-day-spike 2026-07-31
+    python3 volumespikedetect.py MMT --validate
+
+Analyze calendar patterns:
+
+    python3 volumespikedetect.py MMT --calendar
+
+JSON output:
+
+    python3 volumespikedetect.py MMT --validate --json
 
 
-Offset convention
------------------
+Workflow
+--------
 
-days_before MUST be zero or negative.
+1. Use --add to label spikes as you observe them
+2. Use --validate to see how accurate the auto-detector is
+3. Use --calendar to check for accounting settlement patterns
+4. Add more labels over time to improve the detector's validation
 
-For example:
 
-    -5
+Storage
+-------
 
-means:
-
-    five days before the nominated spike date.
-
-days_after MUST be zero or positive.
-
-This deliberately makes the stored values useful as relative offsets:
-
-    -5 -4 -3 -2 -1  0  +1 +2 +3 +4
-                     ^
-                  spike day
-
-This should also make later graphing and analysis relatively simple.
+Labels are stored in data/{ASSET}_{REFERENCE}_spike_labels.json
+Separate from market data and auto-detection results.
 """
 
 import argparse
 import configparser
 import json
+import sys
 from datetime import datetime
 from pathlib import Path
 
 
-DEFAULT_REFERENCE_CURRENCY = "USDT"
+BASE = Path(__file__).resolve().parent
+CONFIG_FILE = BASE / "config.ini"
+
+DEFAULT_REFERENCE = "USDT"
 
 
 def load_config():
-    """
-    Load config.ini from the same directory as this program.
-
-    Nothing currently depends strongly on configuration, but using
-    ConfigParser now leaves room for the reference currency and other
-    settings to become configurable without changing the command-line
-    interface.
-    """
-
     config = configparser.ConfigParser()
-
-    config_path = Path(__file__).resolve().parent / "config.ini"
-
-    if config_path.exists():
-        config.read(config_path)
-
+    config.read(CONFIG_FILE)
     return config
 
 
-def get_reference_currency(config):
-    """
-    Return the local/reference currency.
-
-    For now USDT remains the default.
-
-    This intentionally tolerates several possible future config
-    layouts rather than making the rest of the program dependent on
-    one unfinished config.ini design.
-    """
-
-    candidates = [
-        ("market", "reference_currency"),
-        ("crypto", "reference_currency"),
-        ("general", "reference_currency"),
-    ]
-
-    for section, option in candidates:
-        if config.has_option(section, option):
-            value = config.get(section, option).strip()
-
-            if value:
-                return value.upper()
-
-    return DEFAULT_REFERENCE_CURRENCY
+def get_reference(config):
+    return config.get(
+        "market-data", "reference_currency", fallback=DEFAULT_REFERENCE
+    ).upper()
 
 
-def spike_file_path(asset, reference_currency):
-    """
-    Return the spike metadata filename.
-
-    Example:
-
-        data/DGB_USDT_spikes.json
-    """
-
-    base_dir = Path(__file__).resolve().parent
-    data_dir = base_dir / "data"
-
-    data_dir.mkdir(parents=True, exist_ok=True)
-
-    filename = (
-        f"{asset.upper()}_"
-        f"{reference_currency.upper()}_spikes.json"
-    )
-
-    return data_dir / filename
+def get_data_dir(config):
+    path = Path(config.get("storage", "data_dir", fallback="data"))
+    if not path.is_absolute():
+        path = BASE / path
+    return path
 
 
-def empty_spike_file(asset, reference_currency):
-    """
-    Create the initial in-memory structure for a spike file.
-
-    Additional marker classes can be added later without changing the
-    historical market-data file.
-    """
-
-    return {
-        "asset": asset.upper(),
-        "reference_currency": reference_currency.upper(),
-        "daily_spikes": [],
-    }
+def label_file_path(data_dir, asset, reference):
+    return data_dir / f"{asset}_{reference}_spike_labels.json"
 
 
-def load_spikes(path, asset, reference_currency):
-    """
-    Load an existing spike file or return an empty structure.
-    """
-
+def load_labels(path):
     if not path.exists():
-        return empty_spike_file(asset, reference_currency)
+        return {"spikes": []}
 
     with path.open("r", encoding="utf-8") as handle:
         data = json.load(handle)
 
-    if "daily_spikes" not in data:
-        data["daily_spikes"] = []
+    if "spikes" not in data:
+        data["spikes"] = []
 
     return data
 
 
-def save_spikes(path, data):
-    """
-    Save spike metadata in human-readable JSON.
-    """
+def save_labels(path, data):
+    path.parent.mkdir(parents=True, exist_ok=True)
 
     with path.open("w", encoding="utf-8") as handle:
-        json.dump(
-            data,
-            handle,
-            indent=2,
-            ensure_ascii=False,
-        )
-
+        json.dump(data, handle, indent=2, ensure_ascii=False)
         handle.write("\n")
 
 
-def validate_date(value):
-    """
-    Require an ISO YYYY-MM-DD date.
+def load_ohlcv(data_dir, asset, reference):
+    path = data_dir / f"{asset}_{reference}.json"
+    if not path.exists():
+        return []
 
-    Using one canonical representation makes later joins against the
-    daily history files straightforward.
-    """
+    with path.open("r", encoding="utf-8") as handle:
+        document = json.load(handle)
 
-    try:
-        datetime.strptime(value, "%Y-%m-%d")
-    except ValueError:
-        raise ValueError(
-            f"Invalid date '{value}'. "
-            "Expected YYYY-MM-DD."
-        )
-
-    return value
+    return document.get("data", [])
 
 
-def add_day_spike(
-    data,
-    date,
-    days_before,
-    days_after,
-    label=None,
-    description=None,
-):
-    """
-    Add one manually observed daily spike.
+def parse_rows(rows):
+    parsed = []
+    for row in rows:
+        try:
+            parsed.append({
+                "date": row["date"],
+                "open": float(row["open"]),
+                "high": float(row["high"]),
+                "low": float(row["low"]),
+                "close": float(row["close"]),
+                "volume": float(row["volume"]),
+            })
+        except (KeyError, TypeError, ValueError):
+            continue
+    return parsed
 
-    days_before is deliberately stored as a negative offset.
 
-    days_after is stored as a positive offset.
+# ---------------------------------------------------------------------------
+# Spike labeling
+# ---------------------------------------------------------------------------
 
-    The spike day itself is implicitly offset zero.
-    """
-
-    validate_date(date)
-
-    if days_before > 0:
-        raise ValueError(
-            "days_before must be zero or negative "
-            "(for example -5)."
-        )
-
-    if days_after < 0:
-        raise ValueError(
-            "days_after must be zero or positive "
-            "(for example 4)."
-        )
-
+def add_spike(data, date, reason=None, magnitude=None, source=None):
     existing = next(
-        (
-            spike
-            for spike in data["daily_spikes"]
-            if spike.get("date") == date
-        ),
+        (s for s in data["spikes"] if s["date"] == date),
         None,
     )
 
     if existing:
-        raise ValueError(
-            f"A daily spike is already recorded for {date}."
-        )
+        raise ValueError(f"Spike already recorded for {date}")
 
     spike = {
         "date": date,
-        "days_before": days_before,
-        "days_after": days_after,
+        "labeled_at": datetime.utcnow().isoformat() + "Z",
     }
 
-    if label:
-        spike["label"] = label
+    if reason:
+        spike["reason"] = reason
 
-    if description:
-        spike["description"] = description
+    if magnitude:
+        spike["magnitude"] = magnitude
 
-    data["daily_spikes"].append(spike)
+    if source:
+        spike["source"] = source
 
-    data["daily_spikes"].sort(
-        key=lambda item: item.get("date", "")
-    )
+    data["spikes"].append(spike)
+    data["spikes"].sort(key=lambda s: s["date"])
 
     return spike
 
 
-def remove_day_spike(data, date):
-    """
-    Remove a daily spike identified by its central spike date.
-
-    Returns True if something was removed.
-    """
-
-    validate_date(date)
-
-    original_count = len(data["daily_spikes"])
-
-    data["daily_spikes"] = [
-        spike
-        for spike in data["daily_spikes"]
-        if spike.get("date") != date
-    ]
-
-    return len(data["daily_spikes"]) != original_count
+def remove_spike(data, date):
+    original = len(data["spikes"])
+    data["spikes"] = [s for s in data["spikes"] if s["date"] != date]
+    return len(data["spikes"]) < original
 
 
-def list_spikes(data):
-    """
-    Print currently recorded daily spike markers.
-    """
+# ---------------------------------------------------------------------------
+# Validation
+# ---------------------------------------------------------------------------
 
-    spikes = data.get("daily_spikes", [])
+def validate_labels(data, parsed, lookback=30):
+    try:
+        import sys
+        sys.path.insert(0, str(BASE))
+        from spikedetect import detect_spike, score_assessment
+    except ImportError:
+        print("Error: spikedetect.py not found", file=sys.stderr)
+        return None
+
+    if len(parsed) < lookback + 1:
+        print(
+            f"Error: need {lookback + 1} rows, have {len(parsed)}",
+            file=sys.stderr,
+        )
+        return None
+
+    results = []
+    for i in range(lookback, len(parsed)):
+        result = detect_spike(parsed, i, window=7, lookback=lookback)
+        results.append(result)
+
+    labeled_dates = {s["date"] for s in data["spikes"]}
+    result_dates = {r["date"]: r for r in results}
+
+    true_positives = []
+    false_positives = []
+    missed = []
+
+    for date in labeled_dates:
+        if date in result_dates:
+            result = result_dates[date]
+            if result["total_score"] >= 50:
+                true_positives.append({
+                    "date": date,
+                    "score": result["total_score"],
+                    "label": next(
+                        (s for s in data["spikes"] if s["date"] == date),
+                        {},
+                    ),
+                })
+            else:
+                missed.append({
+                    "date": date,
+                    "score": result["total_score"],
+                    "label": next(
+                        (s for s in data["spikes"] if s["date"] == date),
+                        {},
+                    ),
+                })
+        else:
+            missed.append({
+                "date": date,
+                "score": None,
+                "label": next(
+                    (s for s in data["spikes"] if s["date"] == date),
+                    {},
+                ),
+            })
+
+    for date, result in result_dates.items():
+        if date not in labeled_dates and result["total_score"] >= 50:
+            false_positives.append({
+                "date": date,
+                "score": result["total_score"],
+            })
+
+    total_labeled = len(labeled_dates)
+    total_detected = len(true_positives)
+    total_missed = len(missed)
+    total_fp = len(false_positives)
+
+    detection_rate = (
+        total_detected / total_labeled * 100
+        if total_labeled > 0
+        else 0
+    )
+    fp_rate = (
+        total_fp / (total_detected + total_fp) * 100
+        if (total_detected + total_fp) > 0
+        else 0
+    )
+
+    return {
+        "total_labeled": total_labeled,
+        "total_detected": total_detected,
+        "total_missed": total_missed,
+        "total_false_positives": total_fp,
+        "detection_rate": detection_rate,
+        "false_positive_rate": fp_rate,
+        "true_positives": true_positives,
+        "missed": missed,
+        "false_positives": false_positives,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Calendar analysis
+# ---------------------------------------------------------------------------
+
+def calendar_analysis(data, parsed):
+    labeled = data["spikes"]
+
+    if not labeled:
+        return None
+
+    month_ends = 0
+    month_start = 0
+    mid_month = 0
+
+    for spike in labeled:
+        date = datetime.strptime(spike["date"], "%Y-%m-%d")
+        day = date.day
+        _, last_day = _month_range(date.year, date.month)
+
+        if day >= last_day - 3:
+            month_ends += 1
+        elif day <= 3:
+            month_start += 1
+        else:
+            mid_month += 1
+
+    total = len(labeled)
+
+    return {
+        "total_spikes": total,
+        "month_end": month_ends,
+        "month_end_pct": month_ends / total * 100 if total > 0 else 0,
+        "month_start": month_start,
+        "month_start_pct": month_start / total * 100 if total > 0 else 0,
+        "mid_month": mid_month,
+        "mid_month_pct": mid_month / total * 100 if total > 0 else 0,
+    }
+
+
+def _month_range(year, month):
+    if month == 12:
+        next_month = datetime(year + 1, 1, 1)
+    else:
+        next_month = datetime(year, month + 1, 1)
+
+    last_day = (next_month - __import__("datetime").timedelta(days=1)).day
+    return 1, last_day
+
+
+# ---------------------------------------------------------------------------
+# Display
+# ---------------------------------------------------------------------------
+
+def format_list(data):
+    spikes = data["spikes"]
 
     if not spikes:
-        print("No daily spike markers.")
+        print("No labeled spikes.")
         return
 
-    asset = data.get("asset", "?")
-    reference = data.get("reference_currency", "?")
-
-    print(f"{asset}/{reference} daily spike markers")
-    print()
+    print(f"LABELED SPIKES ({len(spikes)} total)")
+    print("-" * 60)
+    print(f"  {'Date':<12} {'Reason':<30} {'Magnitude':<10}")
+    print(f"  {'-'*12} {'-'*30} {'-'*10}")
 
     for spike in spikes:
-        date = spike.get("date", "?")
-        before = spike.get("days_before", 0)
-        after = spike.get("days_after", 0)
+        date = spike["date"]
+        reason = spike.get("reason", "")[:30]
+        magnitude = spike.get("magnitude", "")
 
-        label = spike.get("label")
-
-        if label:
-            print(
-                f"{date}  "
-                f"[{before} .. +{after}]  "
-                f"{label}"
-            )
+        if magnitude:
+            print(f"  {date:<12} {reason:<30} {magnitude:<10}")
         else:
-            print(
-                f"{date}  "
-                f"[{before} .. +{after}]"
-            )
+            print(f"  {date:<12} {reason:<30}")
 
-        description = spike.get("description")
+    print()
 
-        if description:
-            print(f"    {description}")
 
+def format_validation(result):
+    if result is None:
+        return
+
+    print("VALIDATION REPORT")
+    print("=" * 60)
+    print()
+    print(f"  Labeled spikes:      {result['total_labeled']}")
+    print(f"  Detected by auto:    {result['total_detected']}")
+    print(f"  Missed by auto:      {result['total_missed']}")
+    print(f"  False positives:     {result['total_false_positives']}")
+    print()
+    print(f"  Detection rate:      {result['detection_rate']:.0f}%")
+    print(f"  False positive rate: {result['false_positive_rate']:.0f}%")
+    print()
+
+    if result["true_positives"]:
+        print("TRUE POSITIVES (auto-detected correctly):")
+        print("-" * 60)
+        for tp in result["true_positives"]:
+            reason = tp["label"].get("reason", "no reason given")
+            print(f"  {tp['date']}: score {tp['score']}/100 — {reason}")
+        print()
+
+    if result["missed"]:
+        print("MISSED (auto-detector missed these):")
+        print("-" * 60)
+        for m in result["missed"]:
+            reason = m["label"].get("reason", "no reason given")
+            score = f"score {m['score']}" if m["score"] is not None else "no data"
+            print(f"  {m['date']}: {score} — {reason}")
+        print()
+
+    if result["false_positives"]:
+        print("FALSE POSITIVES (auto-detected but not labeled):")
+        print("-" * 60)
+        for fp in result["false_positives"]:
+            print(f"  {fp['date']}: score {fp['score']}/100")
+        print()
+
+
+def format_calendar(result):
+    if result is None:
+        print("No labeled spikes for calendar analysis.")
+        return
+
+    print("CALENDAR ANALYSIS")
+    print("=" * 60)
+    print()
+    print(f"  Total labeled spikes: {result['total_spikes']}")
+    print()
+    print(f"  Month-end (day 28+):  {result['month_end']:>3}  ({result['month_end_pct']:.0f}%)")
+    print(f"  Month-start (day 1-3): {result['month_start']:>3}  ({result['month_start_pct']:.0f}%)")
+    print(f"  Mid-month:            {result['mid_month']:>3}  ({result['mid_month_pct']:.0f}%)")
+    print()
+
+    if result["month_end_pct"] > 40:
+        print("  OBSERVATION: Spikes cluster near month-end.")
+        print("  This supports the accounting settlement hypothesis.")
+    elif result["month_start_pct"] > 40:
+        print("  OBSERVATION: Spikes cluster near month-start.")
+        print("  This may indicate beginning-of-period activity.")
+    else:
+        print("  OBSERVATION: No strong calendar pattern detected.")
+
+    print()
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
 
 def build_parser():
     parser = argparse.ArgumentParser(
-        description=(
-            "Record and inspect crypto spike markers."
-        )
+        description="Ground truth tool for spike detection."
     )
 
     parser.add_argument(
         "asset",
-        help="Crypto asset symbol, e.g. MMT or DGB",
+        help="Crypto asset symbol (e.g. MMT, DGB)",
     )
 
-    actions = parser.add_mutually_exclusive_group(
-        required=True
-    )
+    actions = parser.add_mutually_exclusive_group(required=True)
 
     actions.add_argument(
-        "--add-day-spike",
-        nargs=3,
-        metavar=(
-            "DATE",
-            "DAYS_BEFORE",
-            "DAYS_AFTER",
-        ),
-        help=(
-            "Add a daily spike marker. "
-            "DAYS_BEFORE should be negative."
-        ),
-    )
-
-    actions.add_argument(
-        "--remove-day-spike",
+        "--add",
         metavar="DATE",
-        help="Remove the spike marker for DATE.",
+        help="Add a labeled spike (YYYY-MM-DD)",
+    )
+
+    actions.add_argument(
+        "--remove",
+        metavar="DATE",
+        help="Remove a labeled spike",
     )
 
     actions.add_argument(
         "--list",
         action="store_true",
-        help="List recorded spike markers.",
+        help="List all labeled spikes",
+    )
+
+    actions.add_argument(
+        "--validate",
+        action="store_true",
+        help="Validate labels against auto-detector",
+    )
+
+    actions.add_argument(
+        "--calendar",
+        action="store_true",
+        help="Analyze calendar patterns in labeled spikes",
     )
 
     parser.add_argument(
-        "--label",
-        help="Optional short human-readable spike label.",
+        "--reason",
+        help="Why you think this spike happened",
     )
 
     parser.add_argument(
-        "--description",
-        help="Optional longer description or research note.",
+        "--magnitude",
+        help="Approximate size (e.g. '+30%', '2x normal')",
+    )
+
+    parser.add_argument(
+        "--source",
+        help="How you observed it (e.g. 'manual chart review')",
+    )
+
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Structured JSON output",
     )
 
     return parser
@@ -414,89 +509,85 @@ def main():
     asset = args.asset.upper()
 
     config = load_config()
+    reference = get_reference(config)
+    data_dir = get_data_dir(config)
 
-    reference_currency = get_reference_currency(
-        config
-    )
+    label_path = label_file_path(data_dir, asset, reference)
+    data = load_labels(label_path)
 
-    path = spike_file_path(
-        asset,
-        reference_currency,
-    )
+    ohlcv = load_ohlcv(data_dir, asset, reference)
+    parsed = parse_rows(ohlcv)
 
-    data = load_spikes(
-        path,
-        asset,
-        reference_currency,
-    )
-
-    if args.add_day_spike:
-        date, before_text, after_text = (
-            args.add_day_spike
-        )
+    if args.add:
+        try:
+            datetime.strptime(args.add, "%Y-%m-%d")
+        except ValueError:
+            parser.error(
+                f"Invalid date '{args.add}'. Expected YYYY-MM-DD."
+            )
 
         try:
-            days_before = int(before_text)
-            days_after = int(after_text)
-
-            spike = add_day_spike(
-                data=data,
-                date=date,
-                days_before=days_before,
-                days_after=days_after,
-                label=args.label,
-                description=args.description,
+            spike = add_spike(
+                data,
+                date=args.add,
+                reason=args.reason,
+                magnitude=args.magnitude,
+                source=args.source,
             )
+        except ValueError as exc:
+            parser.error(str(exc))
 
-        except ValueError as error:
-            parser.error(str(error))
+        save_labels(label_path, data)
 
-        save_spikes(path, data)
-
-        print(
-            f"Added daily spike: {spike['date']} "
-            f"({spike['days_before']} .. "
-            f"+{spike['days_after']})"
-        )
-
-        if spike.get("label"):
-            print(
-                f"Label: {spike['label']}"
-            )
-
-        print(f"Stored in {path}")
+        print(f"Added labeled spike: {spike['date']}")
+        if spike.get("reason"):
+            print(f"  Reason: {spike['reason']}")
+        if spike.get("magnitude"):
+            print(f"  Magnitude: {spike['magnitude']}")
+        print(f"Stored in {label_path}")
 
         return
 
-    if args.remove_day_spike:
-        try:
-            removed = remove_day_spike(
-                data,
-                args.remove_day_spike,
-            )
-        except ValueError as error:
-            parser.error(str(error))
+    if args.remove:
+        removed = remove_spike(data, args.remove)
 
         if not removed:
-            print(
-                "No daily spike marker found for "
-                f"{args.remove_day_spike}."
-            )
+            print(f"No labeled spike found for {args.remove}.")
             return
 
-        save_spikes(path, data)
-
-        print(
-            "Removed daily spike: "
-            f"{args.remove_day_spike}"
-        )
-
-        print(f"Stored in {path}")
+        save_labels(label_path, data)
+        print(f"Removed labeled spike: {args.remove}")
+        print(f"Stored in {label_path}")
 
         return
 
     if args.list:
-        list_spikes(data)
+        if args.json:
+            print(json.dumps(data, indent=2, ensure_ascii=False))
+        else:
+            format_list(data)
+
+        return
+
+    if args.validate:
+        result = validate_labels(data, parsed)
+
+        if args.json:
+            print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
+        else:
+            format_validation(result)
+
+        return
+
+    if args.calendar:
+        result = calendar_analysis(data, parsed)
+
+        if args.json:
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+        else:
+            format_calendar(result)
+
+        return
 
 
 if __name__ == "__main__":

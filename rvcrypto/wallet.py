@@ -11,11 +11,35 @@ Commands:
     python3 wallet.py --add DGB
     python3 wallet.py --remove DGB
     python3 wallet.py --json
+    python3 wallet.py --spike-summary
+    python3 wallet.py --spike-history
+    python3 wallet.py --spike-history --history-days 60
+    python3 wallet.py --spike-history --sort volume
+    python3 wallet.py --spike-history --sort events --reverse
 
 --add replaces the old addasset.py workflow:
     1. Add the asset to data/wallet.json if it is not already present.
     2. Collect initial Binance daily history for ASSET/REFERENCE.
     3. Save that history to data/ASSET_REFERENCE.json.
+
+--spike-summary shows current spike detection scores for all wallet
+assets, including volume ratio, assessment, and historical context.
+
+--spike-history shows recent spike events for all wallet assets,
+sorted by score descending. Use --history-days to change the lookback
+period (default: 30 days).
+
+--sort controls sorting order:
+    score    Sort by max score (default)
+    date     Sort by most recent event
+    volume   Sort by highest volume ratio
+    events   Sort by number of events
+    asset    Sort alphabetically by asset
+
+--reverse reverses sort order (ascending instead of descending).
+
+--json-spike outputs the spike summary or history as JSON for
+programmatic use.
 
 Three.js owns z-positioning and stacking. wallet.py owns membership,
 stable sort order, and whether an asset is a widget/reference display.
@@ -28,6 +52,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import collecthistory
+import spikedetect
 
 
 BASE = Path(__file__).resolve().parent
@@ -468,6 +493,329 @@ def update_history(config):
             asset=asset,
             reference=reference,
         )
+
+
+def get_spike_scores(config):
+    """
+    Get spike detection scores for all wallet assets.
+    Returns list of dicts with asset, score, volume_ratio, assessment, details.
+    """
+    wallet = make_data(config)
+    data_dir = get_data_dir(config)
+    reference = get_default_reference(config)
+    
+    results = []
+    
+    for item in wallet["assets"]:
+        if not item["enabled"]:
+            continue
+        
+        asset = item["asset"]
+        
+        try:
+            rows = spikedetect.load_ohlcv(data_dir, asset, reference)
+            
+            if len(rows) < 2:
+                raise ValueError("Not enough data")
+            
+            # Score the most recent day
+            result = spikedetect.detect_spike(rows, len(rows) - 1, window=7, lookback=30)
+            
+            score = result["total_score"]
+            vol_ratio = result["volume_ratio"]
+            assessment = spikedetect.score_assessment(score)
+            volume = result["volume"]
+            
+            # Get historical stats from last 30 days
+            lookback = min(30, len(rows) - 1)
+            recent_scores = []
+            for i in range(len(rows) - lookback, len(rows)):
+                try:
+                    r = spikedetect.detect_spike(rows, i, window=7, lookback=30)
+                    recent_scores.append(r["total_score"])
+                except Exception:
+                    continue
+            
+            avg_score = sum(recent_scores) / len(recent_scores) if recent_scores else 0
+            max_score = max(recent_scores) if recent_scores else 0
+            events = len([s for s in recent_scores if s >= 50])
+            
+            results.append({
+                "asset": asset,
+                "score": score,
+                "volume_ratio": vol_ratio,
+                "assessment": assessment,
+                "volume": volume,
+                "avg_30d": round(avg_score, 1),
+                "max_30d": max_score,
+                "recent_events": events,
+            })
+        except Exception as e:
+            results.append({
+                "asset": asset,
+                "score": 0,
+                "volume_ratio": 1.0,
+                "assessment": "ERROR",
+                "volume": 0,
+                "avg_30d": 0,
+                "max_30d": 0,
+                "recent_events": 0,
+                "error": str(e),
+            })
+    
+    return results
+
+
+def spike_assessment_label(score):
+    if score >= 75:
+        return "SELL SIGNAL"
+    elif score >= 50:
+        return "SPIKE LIKELY"
+    elif score >= 25:
+        return "WATCH"
+    else:
+        return "NO SPIKE"
+
+
+def show_spike_summary(config, sort_by="score", reverse=False):
+    """
+    Display spike detection summary for all wallet assets.
+    Format: clear, readable table with current scores and historical context.
+    """
+    results = get_spike_scores(config)
+    
+    if not results:
+        print("No enabled assets in wallet.")
+        return
+    
+    print()
+    print("SPIKE DETECTION SUMMARY")
+    print("=" * 60)
+    print()
+    print("Current scores with 30-day context:")
+    print()
+    
+    # Header
+    print(f"  {'ASSET':<8} {'SCORE':<10} {'VOL RATIO':<12} {'ASSESSMENT':<15} {'30D AVG':<10} {'30D MAX':<10} {'EVENTS':<8}")
+    print("  " + "-" * 72)
+    
+    # Sort results
+    if sort_by == "score":
+        results.sort(key=lambda x: x["score"], reverse=not reverse)
+    elif sort_by == "date":
+        # For current scores, date is always today, so sort by asset
+        results.sort(key=lambda x: x["asset"], reverse=reverse)
+    elif sort_by == "volume":
+        results.sort(key=lambda x: x["volume_ratio"], reverse=not reverse)
+    elif sort_by == "events":
+        results.sort(key=lambda x: x["recent_events"], reverse=not reverse)
+    elif sort_by == "asset":
+        results.sort(key=lambda x: x["asset"], reverse=reverse)
+    
+    for r in results:
+        score_str = f"{r['score']}/100"
+        vol_str = f"{r['volume_ratio']:.1f}x"
+        assessment = spike_assessment_label(r['score'])
+        
+        # Add marker for high scores
+        marker = " <-- SELL" if r['score'] >= 75 else ""
+        
+        print(
+            f"  {r['asset']:<8} "
+            f"{score_str:<10} "
+            f"{vol_str:<12} "
+            f"{assessment:<15} "
+            f"{r['avg_30d']:<10} "
+            f"{r['max_30d']:<10} "
+            f"{r['recent_events']:<8}"
+            f"{marker}"
+        )
+    
+    print()
+    print("Legend:")
+    print("  SCORE      0-100 spike probability (higher = more likely)")
+    print("  VOL RATIO  Current volume / 20-day average (>2.0x = unusual)")
+    print("  30D AVG    Average score over last 30 days")
+    print("  30D MAX    Highest score in last 30 days")
+    print("  EVENTS     Days with score >= 50 in last 30 days")
+    print()
+    print("Assessment thresholds:")
+    print("  75+   SELL SIGNAL  — Spike imminent, take profits")
+    print("  50-74 SPIKE LIKELY — Elevated risk, monitor closely")
+    print("  25-49 WATCH        — Some activity, no action needed")
+    print("  0-24  NO SPIKE     — Quiet, normal conditions")
+    print()
+    
+    # Show actionable items
+    sells = [r for r in results if r['score'] >= 75]
+    watches = [r for r in results if 50 <= r['score'] < 75]
+    
+    if sells:
+        print("ACTION REQUIRED:")
+        for r in sells:
+            print(f"  SELL {r['asset']} — score {r['score']}/100")
+        print()
+    
+    if watches:
+        print("MONITOR CLOSELY:")
+        for r in watches:
+            print(f"  WATCH {r['asset']} — score {r['score']}/100")
+        print()
+
+
+def get_spike_history(config, days=30):
+    """
+    Get recent spike history for all wallet assets.
+    Returns list of dicts with asset and list of recent spike events.
+    """
+    wallet = make_data(config)
+    data_dir = get_data_dir(config)
+    reference = get_default_reference(config)
+    
+    results = []
+    
+    for item in wallet["assets"]:
+        if not item["enabled"]:
+            continue
+        
+        asset = item["asset"]
+        
+        try:
+            rows = spikedetect.load_ohlcv(data_dir, asset, reference)
+            
+            if len(rows) < 2:
+                raise ValueError("Not enough data")
+            
+            # Get recent spike events (last N days)
+            events = []
+            start_idx = max(0, len(rows) - days)
+            
+            for i in range(start_idx, len(rows)):
+                try:
+                    result = spikedetect.detect_spike(rows, i, window=7, lookback=30)
+                    score = result["total_score"]
+                    
+                    if score >= 25:  # Only include WATCH and above
+                        events.append({
+                            "date": result["date"],
+                            "score": score,
+                            "volume_ratio": result["volume_ratio"],
+                            "direction": result["direction"],
+                            "pullback_pct": result["pullback_pct"],
+                            "volume": result["volume"],
+                        })
+                except Exception:
+                    continue
+            
+            # Sort by score descending
+            events.sort(key=lambda x: x["score"], reverse=True)
+            
+            results.append({
+                "asset": asset,
+                "events": events,
+                "total_days": days,
+            })
+        except Exception as e:
+            results.append({
+                "asset": asset,
+                "events": [],
+                "total_days": days,
+                "error": str(e),
+            })
+    
+    return results
+
+
+def show_spike_history(config, days=30, sort_by="score", reverse=False):
+    """
+    Display recent spike history for all wallet assets.
+    Format: clear, readable list of recent events by asset.
+    """
+    results = get_spike_history(config, days)
+    
+    if not results:
+        print("No enabled assets in wallet.")
+        return
+    
+    print()
+    print(f"SPIKE HISTORY (last {days} days)")
+    print("=" * 60)
+    print()
+    
+    # Sort results
+    if sort_by == "score":
+        # Sort by max score descending
+        results.sort(key=lambda x: max([e["score"] for e in x["events"]]) if x["events"] else 0, reverse=not reverse)
+    elif sort_by == "date":
+        # Sort by most recent event date descending
+        def get_latest_date(r):
+            if r["events"]:
+                return max(e["date"] for e in r["events"])
+            return "0000-00-00"
+        results.sort(key=get_latest_date, reverse=not reverse)
+    elif sort_by == "volume":
+        # Sort by max volume ratio descending
+        def get_max_vol(r):
+            if r["events"]:
+                return max(e["volume_ratio"] for e in r["events"])
+            return 0
+        results.sort(key=get_max_vol, reverse=not reverse)
+    elif sort_by == "events":
+        # Sort by number of events descending
+        results.sort(key=lambda x: len(x["events"]), reverse=not reverse)
+    elif sort_by == "asset":
+        results.sort(key=lambda x: x["asset"], reverse=reverse)
+    
+    for r in results:
+        asset = r["asset"]
+        events = r["events"]
+        
+        if not events:
+            print(f"  {asset}: No spikes detected in last {days} days")
+            continue
+        
+        print(f"  {asset}: {len(events)} spike(s) detected")
+        
+        # Show top 5 events
+        for e in events[:5]:
+            direction = e["direction"]
+            pullback = e["pullback_pct"]
+            vol_ratio = e["volume_ratio"]
+            
+            # Format direction with pullback
+            if direction == "UP" and pullback > 0:
+                dir_str = f"UP (pulled back {pullback * 100:.1f}%)"
+            elif direction == "DOWN" and pullback > 0:
+                dir_str = f"DOWN (pulled back {pullback * 100:.1f}%)"
+            else:
+                dir_str = direction
+            
+            print(
+                f"    {e['date']}  "
+                f"score {e['score']:>3}/100  "
+                f"{vol_ratio:.1f}x vol  "
+                f"{dir_str}"
+            )
+        
+        if len(events) > 5:
+            print(f"    ... and {len(events) - 5} more")
+        
+        print()
+    
+    print("Legend:")
+    print("  score     0-100 spike probability")
+    print("  vol       volume ratio (current / 20-day average)")
+    print("  direction price movement direction")
+    print("  pulled back % decline after spike (mean reversion)")
+    print()
+    print("Sort options:")
+    print("  --sort score    Sort by max score (default)")
+    print("  --sort date     Sort by most recent event")
+    print("  --sort volume   Sort by highest volume ratio")
+    print("  --sort events   Sort by number of events")
+    print("  --sort asset    Sort alphabetically by asset")
+    print("  --reverse       Reverse sort order (ascending)")
+    print()
         
 def add_asset(
     config,
@@ -717,6 +1065,44 @@ def build_parser():
         help="Render wallet.json as normalized JSON.",
     )
 
+    actions.add_argument(
+        "--spike-summary",
+        action="store_true",
+        help="Show spike detection scores for all wallet assets.",
+    )
+
+    actions.add_argument(
+        "--spike-history",
+        action="store_true",
+        help="Show recent spike history for all wallet assets.",
+    )
+
+    parser.add_argument(
+        "--json-spike",
+        action="store_true",
+        help="Output spike summary as JSON (use with --spike-summary or --spike-history).",
+    )
+
+    parser.add_argument(
+        "--history-days",
+        type=int,
+        default=30,
+        help="Number of days to look back for --spike-history (default: 30).",
+    )
+
+    parser.add_argument(
+        "--sort",
+        choices=["score", "date", "volume", "events", "asset"],
+        default="score",
+        help="Sort spike results by: score (default), date, volume, events, or asset.",
+    )
+
+    parser.add_argument(
+        "--reverse",
+        action="store_true",
+        help="Reverse sort order (ascending instead of descending).",
+    )
+
     parser.add_argument(
         "--reference",
         metavar="CURRENCY",
@@ -798,6 +1184,20 @@ def main():
                 )
             )
            
+        elif args.spike_summary:
+            if args.json_spike:
+                results = get_spike_scores(config)
+                print(json.dumps(results, indent=2))
+            else:
+                show_spike_summary(config, sort_by=args.sort, reverse=args.reverse)
+
+        elif args.spike_history:
+            if args.json_spike:
+                results = get_spike_history(config, days=args.history_days)
+                print(json.dumps(results, indent=2))
+            else:
+                show_spike_history(config, days=args.history_days, sort_by=args.sort, reverse=args.reverse)
+
         elif args.update_history:
             update_history(config)            
 

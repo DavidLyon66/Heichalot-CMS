@@ -233,6 +233,7 @@ def new_asset_document(asset, reference_currency, pair):
         "daily-spike-markers": [],
         "weekly-spike-markers": [],
         "monthly-spike-markers": [],
+        "daily-peak-markers": [],
         "data": [],
     }
 
