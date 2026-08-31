@@ -272,6 +272,7 @@
 
       let walletLayer = null;
       let walletTiles = [];
+      let overviewLayer = null;
       const walletRaycaster = new THREE.Raycaster();
       const walletPointer = new THREE.Vector2();
 
@@ -290,6 +291,21 @@
       let reportPanel = null;
       let currentAsset = null;
 
+      /*
+        Explicit display state.  These defaults mirror the API response and
+        avoid inferring the current mode from whichever Three.js layers exist.
+      */
+      let displayType = "wallet-minigraph";
+      let turnDisplay = true;
+      let overviewDataCache = null;
+
+      /*
+        Full analysis controls for single-asset display.
+
+        wallet-minigraph mode does NOT use this list; it creates its own
+        compact RHS controls (TURN only).  asset-display mode uses this
+        complete list, plus the BACK navigation tile.
+      */
       const LAYER_BUTTONS = [
         { code: "TURN", endpoint: "turndetect" },
         { code: "TODAY", endpoint: "today" },
@@ -1099,6 +1115,352 @@
         walletTiles = [];
       }
 
+      function clearOverviewLayer() {
+        if (!overviewLayer) return;
+
+        scene.remove(overviewLayer);
+        disposeObject3D(overviewLayer);
+        overviewLayer = null;
+      }
+
+
+      function addOverviewTurnOverlay(
+        rowGroup,
+        displayValue,
+        rows,
+        minPrice,
+        rawRange,
+        graphWidth,
+        graphHeight,
+        baselineY,
+        slotWidth
+      ) {
+        if (
+          !displayValue ||
+          !displayValue.display_options ||
+          !displayValue.display_options["rolling-backtest"] ||
+          !Array.isArray(displayValue.rolling_backtest) ||
+          !displayValue.rolling_backtest.length ||
+          !rows.length
+        ) {
+          return;
+        }
+
+        const datedRows = rows.filter(function (row) {
+          return !Number.isNaN(
+            Date.parse(row.date + "T00:00:00Z")
+          );
+        });
+
+        if (!datedRows.length) return;
+
+        const firstDateMs = Date.parse(
+          datedRows[0].date + "T00:00:00Z"
+        );
+        const oneDayMs = 24 * 60 * 60 * 1000;
+
+        function dateToX(dateText) {
+          const dateMs = Date.parse(
+            String(dateText || "") + "T00:00:00Z"
+          );
+          if (Number.isNaN(dateMs)) return null;
+          const daysFromStart =
+            (dateMs - firstDateMs) / oneDayMs;
+          return (
+            -graphWidth / 2 +
+            slotWidth / 2 +
+            daysFromStart * slotWidth
+          );
+        }
+
+        function priceToY(price) {
+          const numeric = Number(price);
+          if (!Number.isFinite(numeric)) return null;
+          const normalized =
+            rawRange > 0
+              ? (numeric - minPrice) / rawRange
+              : 0.5;
+          return baselineY +
+            normalized * graphHeight;
+        }
+
+        const overlay = new THREE.Group();
+        overlay.name = "overview-turn-overlay";
+        overlay.position.z = 0.20;
+
+        displayValue.rolling_backtest.forEach(
+          function (forecast) {
+            let previousX = dateToX(
+              forecast.origin_date
+            );
+            let previousY = priceToY(
+              forecast.origin_close
+            );
+
+            if (previousX === null || previousY === null) {
+              return;
+            }
+
+            const points = Array.isArray(forecast.points)
+              ? forecast.points
+              : [];
+
+            points.forEach(function (point, index) {
+              const x = dateToX(point.date);
+              const y = priceToY(point.close);
+              if (x === null || y === null) return;
+
+              const geometry =
+                new THREE.BufferGeometry()
+                  .setFromPoints([
+                    new THREE.Vector3(
+                      previousX, previousY, 0
+                    ),
+                    new THREE.Vector3(x, y, 0)
+                  ]);
+
+              const material =
+                new THREE.LineBasicMaterial({
+                  color:
+                    point.colour ||
+                    point.color ||
+                    "#e5e7eb",
+                  transparent: true,
+                  opacity: Math.max(
+                    0.20,
+                    0.72 - index * 0.15
+                  ),
+                  depthWrite: false
+                });
+
+              overlay.add(
+                new THREE.Line(geometry, material)
+              );
+
+              previousX = x;
+              previousY = y;
+            });
+          }
+        );
+
+        rowGroup.add(overlay);
+      }
+
+
+      function overviewCreate(value) {
+        clearOverviewLayer();
+
+        const input =
+          value && typeof value === "object"
+            ? value
+            : {};
+
+        overviewDataCache = input;
+        displayType =
+          String(input.display_type || "wallet-minigraph");
+
+        if (
+          input.options &&
+          input.options["turn-display"] !== undefined
+        ) {
+          turnDisplay = Boolean(
+            input.options["turn-display"]
+          );
+        }
+
+        const assets = Array.isArray(input.assets)
+          ? input.assets
+          : [];
+
+        if (!assets.length) return;
+
+        const group = new THREE.Group();
+        group.name = "overview-layer";
+        group.position.set(-9.6, 9.5, -12.0);
+
+        const graphWidth = 8.4;
+        const graphHeight = 1.12;
+        const baselineHeight = 0.08;
+        const baselineY = -0.55;
+
+        assets.forEach(function (item, rowIndex) {
+          const turnValue =
+            turnDisplay &&
+            item.turn &&
+            item.turn.display &&
+            item.turn.display.value
+              ? item.turn.display.value
+              : null;
+
+          const sourceRows =
+            turnValue && Array.isArray(turnValue.data)
+              ? turnValue.data
+              : Array.isArray(item.data)
+                ? item.data
+                : [];
+
+          const rows = sourceRows
+            .map(function (row) {
+              return {
+                date: row && row.date
+                  ? String(row.date)
+                  : "",
+                close: Number(row && row.close),
+                future: Boolean(row && row.future)
+              };
+            })
+            .filter(function (row) {
+              return Number.isFinite(row.close);
+            });
+
+          if (!rows.length) return;
+
+          const closes = rows.map(function (row) {
+            return row.close;
+          });
+          const minPrice = Math.min.apply(null, closes);
+          const maxPrice = Math.max.apply(null, closes);
+          const rawRange = maxPrice - minPrice;
+          const count = rows.length;
+          const slotWidth = graphWidth / Math.max(1, count);
+          const gap = Math.min(0.08, slotWidth * 0.16);
+          const barWidth = Math.max(0.03, slotWidth - gap);
+
+          const rowGroup = new THREE.Group();
+          rowGroup.name =
+            "overview-asset:" + String(item.asset || "");
+          rowGroup.position.set(0, -rowIndex * 1.85, 0);
+
+          const material = new THREE.MeshBasicMaterial({
+            color: "#38bdf8",
+            side: THREE.DoubleSide,
+            transparent: true,
+            opacity: 0.88,
+            depthWrite: false
+          });
+
+          const futureMaterial =
+            new THREE.MeshBasicMaterial({
+              color:
+                (turnValue &&
+                 (turnValue.future_colour ||
+                  turnValue.futureColor)) ||
+                "#e5e7eb",
+              side: THREE.DoubleSide,
+              transparent: true,
+              opacity: 0.84,
+              depthWrite: false
+            });
+
+          rows.forEach(function (row, index) {
+            const normalized =
+              rawRange > 0
+                ? (row.close - minPrice) / rawRange
+                : 0.5;
+
+            const height =
+              baselineHeight +
+              normalized * graphHeight;
+
+            const bar = new THREE.Mesh(
+              new THREE.PlaneGeometry(
+                barWidth,
+                height
+              ),
+              row.future
+                ? futureMaterial
+                : material
+            );
+
+            const x =
+              -graphWidth / 2 +
+              slotWidth / 2 +
+              index * slotWidth;
+
+            bar.position.set(
+              x,
+              height / 2 + baselineY,
+              0
+            );
+
+            bar.userData = {
+              type: "overview-price-bar",
+              asset: String(item.asset || ""),
+              date: row.date,
+              close: row.close,
+              future: row.future
+            };
+
+            rowGroup.add(bar);
+          });
+
+          if (turnValue) {
+            addOverviewTurnOverlay(
+              rowGroup,
+              turnValue,
+              rows,
+              minPrice,
+              rawRange,
+              graphWidth,
+              graphHeight,
+              baselineY + baselineHeight,
+              slotWidth
+            );
+          }
+
+          const baselineGeometry =
+            new THREE.BufferGeometry().setFromPoints([
+              new THREE.Vector3(
+                -graphWidth / 2,
+                baselineY,
+                0.01
+              ),
+              new THREE.Vector3(
+                graphWidth / 2,
+                baselineY,
+                0.01
+              )
+            ]);
+
+          const baselineMaterial =
+            new THREE.LineBasicMaterial({
+              color: 0x52646a,
+              transparent: true,
+              opacity: 0.42,
+              depthWrite: false
+            });
+
+          rowGroup.add(
+            new THREE.Line(
+              baselineGeometry,
+              baselineMaterial
+            )
+          );
+
+          group.add(rowGroup);
+        });
+
+        overviewLayer = group;
+        scene.add(overviewLayer);
+
+        createOverviewLayerButtons();
+
+        statusTitle.textContent = "Crypto Overview";
+        statusDetail.textContent =
+          assets.length +
+          " assets | " +
+          String(input.days || 14) +
+          " recent points each | TURN " +
+          (turnDisplay ? "on" : "off");
+
+        emitCryptoGraphEvent("OVERVIEW_CREATED", {
+          count: assets.length,
+          days: input.days || 14,
+          display_type: displayType,
+          turn_display: turnDisplay
+        });
+      }
+
       function normaliseWallet(value) {
         const input = value && typeof value === "object" ? value : {};
         let rows = [];
@@ -1241,6 +1603,8 @@
         c.height = 256;
 
         const ctx = c.getContext("2d");
+        const isNavigation =
+          item.type === "navigation";
 
         /*
           Deliberately plain gunmetal styling for the proof of concept.
@@ -1256,12 +1620,18 @@
         ctx.fillStyle = "#e7eef1";
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
-        ctx.font = "700 96px system-ui, sans-serif";
+        ctx.font = isNavigation
+          ? "700 68px system-ui, sans-serif"
+          : "700 96px system-ui, sans-serif";
         ctx.fillText(item.code, c.width / 2, 112);
 
         ctx.font = "500 28px system-ui, sans-serif";
         ctx.fillStyle = "rgba(220, 230, 234, 0.65)";
-        ctx.fillText("REPORT", c.width / 2, 202);
+        ctx.fillText(
+          item.footer || "REPORT",
+          c.width / 2,
+          202
+        );
 
         const texture = new THREE.CanvasTexture(c);
         texture.needsUpdate = true;
@@ -1284,12 +1654,83 @@
         );
 
         tile.userData = {
-          type: "analysis-layer",
+          type: item.type || "analysis-layer",
           code: item.code,
-          endpoint: item.endpoint
+          endpoint: item.endpoint,
+          action: item.action || null
         };
 
         return tile;
+      }
+
+
+      function createOverviewLayerButtons() {
+        clearLayerButtons();
+        clearReportPanel();
+        currentAsset = null;
+
+        const group = new THREE.Group();
+        group.name = "overview-layer-buttons";
+        group.position.set(16.5, -5.3, -12.0);
+
+        const item = {
+          code: "TURN",
+          endpoint: "turndetect",
+          overviewToggle: true
+        };
+
+        const tile = createLayerTile(item);
+        tile.userData.overviewToggle = true;
+        tile.position.set(0, 0, 0);
+        tile.scale.setScalar(turnDisplay ? 1.10 : 1.0);
+
+        group.add(tile);
+        layerButtonTiles.push(tile);
+        layerButtonLayer = group;
+        scene.add(layerButtonLayer);
+      }
+
+
+      function toggleOverviewTurn() {
+        if (displayType !== "wallet-minigraph") {
+          return;
+        }
+
+        turnDisplay = !turnDisplay;
+
+        if (overviewDataCache) {
+          overviewDataCache.options =
+            overviewDataCache.options || {};
+          overviewDataCache.options["turn-display"] =
+            turnDisplay;
+          overviewCreate(overviewDataCache);
+        }
+      }
+
+
+      function showWalletOverview() {
+        displayType = "wallet-minigraph";
+
+        clearAssetLayer();
+        clearLayerButtons();
+        clearReportPanel();
+        currentAsset = null;
+
+        /*
+          Reset any wallet tile which was enlarged/opened while viewing
+          a single asset.
+        */
+        walletTiles.forEach(function (tile) {
+          if (
+            tile.userData &&
+            tile.userData.type !== "action"
+          ) {
+            tile.userData.open = false;
+            tile.scale.setScalar(1.0);
+          }
+        });
+
+        loadOverviewDisplay();
       }
 
 
@@ -1305,16 +1746,32 @@
         group.name = "analysis-layer-buttons:" + currentAsset;
 
         /*
-          Mirror the wallet on the RHS.
+          Asset-display navigation only.
 
-          The wallet "+" tile is currently around world Y ~= -5.3.
-          Start there and grow upward.
+          BACK occupies the bottom RHS slot.  TURN sits immediately
+          above it.  The BACK tile is never created in wallet-minigraph
+          mode; that mode continues to show only the TURN toggle.
         */
         group.position.set(16.5, -5.3, -12.0);
 
+        const backTile = createLayerTile({
+          type: "navigation",
+          code: "← BACK",
+          footer: "OVERVIEW",
+          action: "show_overview"
+        });
+
+        backTile.position.set(0, 0, 0);
+        group.add(backTile);
+        layerButtonTiles.push(backTile);
+
         LAYER_BUTTONS.forEach(function (item, index) {
           const tile = createLayerTile(item);
-          tile.position.set(0, index * 1.85, 0);
+          tile.position.set(
+            0,
+            (index + 1) * 1.85,
+            0
+          );
           group.add(tile);
           layerButtonTiles.push(tile);
         });
@@ -1896,6 +2353,22 @@
               layerHits[0].object.userData;
 
             if (
+              item.action === "show_overview" &&
+              displayType === "asset-display"
+            ) {
+              showWalletOverview();
+              return;
+            }
+
+            if (
+              item.overviewToggle &&
+              displayType === "wallet-minigraph"
+            ) {
+              toggleOverviewTurn();
+              return;
+            }
+
+            if (
               currentAsset &&
               item.endpoint
             ) {
@@ -1944,6 +2417,10 @@
         );
 
         if (item.open) {
+          displayType = "asset-display";
+          CryptoGraph.command(
+            "CLEAR_OVERVIEW"
+          );
           openAssetDisplay(item.asset);
         } else {
           CryptoGraph.command(
@@ -1955,6 +2432,9 @@
             clearReportPanel();
             currentAsset = null;
           }
+
+          displayType = "wallet-minigraph";
+          loadOverviewDisplay();
         }
 
         emitCryptoGraphEvent(
@@ -2392,6 +2872,14 @@
 		  clearWallet();
 		  break;
 
+        case "OVERVIEW_CREATE":
+          overviewCreate(value);
+          break;
+
+        case "CLEAR_OVERVIEW":
+          clearOverviewLayer();
+          break;
+
 		case "RESET_VIEW":
 		  resetView();
 		  break;
@@ -2399,6 +2887,7 @@
 		case "RESET":
 		  clearChannelFrame();
 		  clearAssetLayer();
+        clearOverviewLayer();
 		  clearWallet();
 		  resetView();
 		  break;
@@ -2458,6 +2947,19 @@
         clearReportPanel();
       },
 
+      overviewCreate(data) {
+        handleCommand(
+          "OVERVIEW_CREATE",
+          data
+        );
+      },
+
+      clearOverview() {
+        handleCommand(
+          "CLEAR_OVERVIEW"
+        );
+      },
+
 	  reset() {
 		handleCommand(
 		  "RESET"
@@ -2468,6 +2970,7 @@
 		return {
 		  assetLoaded: Boolean(assetLayer),
 		  channelLoaded: Boolean(channelFrame),
+          overviewLoaded: Boolean(overviewLayer),
 
 		  assetName:
 			assetLayer
@@ -2547,7 +3050,9 @@
           "WALLET_CREATE",
           "CLEAR_WALLET",
           "WALLET_ASSET_TOGGLE",
-          "WALLET_ADD_REQUEST"
+          "WALLET_ADD_REQUEST",
+          "OVERVIEW_CREATE",
+          "CLEAR_OVERVIEW"
         ]
       });
 
@@ -2576,12 +3081,58 @@
                 walletData
             );
 
+            await loadOverviewDisplay();
+
         } catch (error) {
             console.error("Unable to load wallet:", error);
         }
     }
 
+    async function loadOverviewDisplay(days = 14) {
+        try {
+            const response = await fetch(
+                `/crypto/api/overview?days=${encodeURIComponent(days)}`
+            );
+
+            if (!response.ok) {
+                throw new Error(
+                    `Overview request failed: ${response.status}`
+                );
+            }
+
+            const overviewData = await response.json();
+            overviewDataCache = overviewData;
+            displayType = String(
+                overviewData.display_type || "wallet-minigraph"
+            );
+            if (
+                overviewData.options &&
+                overviewData.options["turn-display"] !== undefined
+            ) {
+                turnDisplay = Boolean(
+                    overviewData.options["turn-display"]
+                );
+            }
+
+            CryptoGraph.command(
+                "OVERVIEW_CREATE",
+                overviewData
+            );
+
+            return overviewData;
+
+        } catch (error) {
+            console.error(
+                "Unable to load crypto overview:",
+                error
+            );
+            return null;
+        }
+    }
+
+
 	async function openAssetDisplay(asset) {
+        displayType = "asset-display";
 		const response =
 			await fetch(
 				`/crypto/api/open/${encodeURIComponent(asset)}`
