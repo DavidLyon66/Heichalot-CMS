@@ -86,6 +86,46 @@
   </form>
 </dialog>
 
+<dialog id="crypto_update_dialog" class="modal">
+  <div class="modal-box">
+
+    <h3 class="text-lg font-bold">
+      Crypto Data Update
+    </h3>
+
+    <p class="mt-2 text-sm opacity-70">
+      Data update needed. Update now?
+    </p>
+
+    <div id="crypto-update-detail"
+         class="mt-2 text-xs opacity-50">
+    </div>
+
+    <div class="modal-action">
+
+      <button
+        id="crypto-update-cancel"
+        type="button"
+        class="btn btn-ghost">
+        Cancel
+      </button>
+
+      <button
+        id="crypto-update-ok"
+        type="button"
+        class="btn btn-primary">
+        Ok
+      </button>
+
+    </div>
+
+  </div>
+
+  <form method="dialog" class="modal-backdrop">
+    <button>Close</button>
+  </form>
+</dialog>
+
 <script>
 (function () {
   "use strict";
@@ -114,6 +154,145 @@
       document.getElementById(
           "crypto_add_asset_dialog"
       );
+
+  const updateDialog =
+      document.getElementById(
+          "crypto_update_dialog"
+      );
+
+  const updateOk =
+      document.getElementById(
+          "crypto-update-ok"
+      );
+
+  const updateCancel =
+      document.getElementById(
+          "crypto-update-cancel"
+      );
+
+  const updateDetail =
+      document.getElementById(
+          "crypto-update-detail"
+      );
+
+
+  async function checkCryptoUpdateNeeded() {
+
+    try {
+
+      const response =
+        await fetch(
+          "/crypto/api/wallet/update-needed"
+        );
+
+      if (!response.ok) {
+        throw new Error(
+          `HTTP ${response.status}`
+        );
+      }
+
+      const data =
+        await response.json();
+
+      if (
+        !data ||
+        !data.update_needed
+      ) {
+        return;
+      }
+
+      const stale =
+        Array.isArray(data.assets)
+          ? data.assets.filter(
+              item => item.update_needed
+            )
+          : [];
+
+      if (updateDetail) {
+        updateDetail.textContent =
+          stale.length
+            ? stale.map(
+                item =>
+                  `${item.asset}: ${
+                    item.latest_date || "no data"
+                  }`
+              ).join(" · ")
+            : "";
+      }
+
+      updateDialog?.showModal();
+
+    } catch (error) {
+
+      console.error(
+        "Unable to check crypto data status:",
+        error
+      );
+
+    }
+  }
+
+
+  async function updateCryptoHistory() {
+
+    if (!updateOk) {
+      return;
+    }
+
+    updateOk.disabled = true;
+
+    status.textContent =
+      "Updating crypto data...";
+
+    status.className =
+      "badge badge-info";
+
+    try {
+
+      const response =
+        await fetch(
+          "/crypto/api/wallet/update-history",
+          {
+            method: "POST"
+          }
+        );
+
+      if (!response.ok) {
+        throw new Error(
+          `HTTP ${response.status}`
+        );
+      }
+
+      updateDialog?.close();
+
+      status.textContent =
+        "Crypto data updated";
+
+      status.className =
+        "badge badge-success";
+
+      /*
+       * Reload the page so wallet/graph data is rebuilt from
+       * the newly updated history files.
+       */
+      window.location.reload();
+
+    } catch (error) {
+
+      console.error(
+        "Unable to update crypto data:",
+        error
+      );
+
+      status.textContent =
+        "Crypto data update failed";
+
+      status.className =
+        "badge badge-error";
+
+      updateOk.disabled = false;
+    }
+  }
 
 
   function sendCryptoCommand(
@@ -186,6 +365,8 @@
         status.className =
             "badge badge-success";
 
+        checkCryptoUpdateNeeded();
+
         break;
 
 
@@ -195,6 +376,16 @@
 
         status.className =
             "badge badge-info";
+
+        break;
+
+
+      case "OVERVIEW_CREATED":
+        status.textContent =
+            "Crypto overview ready";
+
+        status.className =
+            "badge badge-success";
 
         break;
 
@@ -251,6 +442,23 @@
    * Add Asset form
    * -------------------------------------------------------
    */
+
+  if (updateOk) {
+    updateOk.addEventListener(
+      "click",
+      updateCryptoHistory
+    );
+  }
+
+  if (updateCancel) {
+    updateCancel.addEventListener(
+      "click",
+      function () {
+        updateDialog?.close();
+      }
+    );
+  }
+
 
   if (addAssetForm) {
 
