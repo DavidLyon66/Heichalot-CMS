@@ -265,6 +265,21 @@ def current_theme() -> str:
     return theme if theme in VALID_THEMES else "dark"
 
 
+def current_daisy_theme() -> str:
+    """
+    Return the optional DaisyUI theme.
+
+    "-" means use the program's built-in/default Heichalot appearance
+    without explicitly applying a DaisyUI theme.
+    """
+    cfg = user_config_parser(current_user())
+    if not cfg.has_section("display"):
+        return "-"
+
+    theme = cfg.get("display", "theme", fallback="-").strip().lower()
+    return theme or "-"
+
+
 def select_html(row: sqlite3.Row, user_level: str) -> str:
     if user_level == "premium":
         return row["html_premium"] or row["html_members"] or row["html_free"] or ""
@@ -823,6 +838,7 @@ def inject_globals():
         "server_variant": SERVER_VARIANT,
         "auth_ui_enabled": AUTH_UI_ENABLED,
         "site_theme": current_theme(),
+        "daisy_theme": current_daisy_theme(),
         "user_lang": current_lang(),
         "content_db": str(CONTENT_DB),
     }
@@ -1184,7 +1200,7 @@ def api_settings():
             "display": {
                 "theme": cfg.get(
                     "display", "theme",
-                    fallback="business",
+                    fallback="-",
                 ),
             },
         })
@@ -1251,7 +1267,7 @@ def api_settings():
     #
 
     theme = str(
-        display_data.get("theme", "business")
+        display_data.get("theme", "-")
     ).strip().lower()
 
     # DaisyUI theme names are simple slugs.
