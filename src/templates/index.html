@@ -1,6 +1,56 @@
 {% extends "base.html" %}
 {% block title %}Heichalot-CMS{% endblock %}
 
+{% block head_extra %}
+<style>
+  /*
+   * DaisyUI theme compatibility — index/article list only.
+   *
+   * These rules apply only when a real DaisyUI theme is selected.
+   * With the "None" theme there is no html[data-theme] attribute,
+   * so the original Heichalot index styling remains unchanged.
+   */
+  /*
+   * DaisyUI base surfaces for the index page only.
+   *
+   * base-100 = page/workspace background
+   * base-200 = article-list panel
+   * base-300 = panel edge/divider
+   *
+   * None remains untouched because it has no html[data-theme].
+   */
+  html[data-theme] .app-content {
+    background: var(--color-base-100);
+  }
+
+  html[data-theme] .app-content main {
+    background: var(--color-base-200);
+    border: 1px solid var(--color-base-300);
+    color: var(--color-base-content);
+  }
+
+  html[data-theme] .app-content main h1,
+  html[data-theme] .app-content main p,
+  html[data-theme] .app-content .entry-time,
+  html[data-theme] .app-content .entry-title,
+  html[data-theme] .app-content .entry-title a,
+  html[data-theme] .app-content .entry-title small,
+  html[data-theme] .app-content .section-description,
+  html[data-theme] .app-content .pagination {
+    color: var(--color-base-content);
+  }
+
+  html[data-theme] .app-content .pagination a {
+    color: var(--color-base-content);
+    border-color: color-mix(
+      in oklab,
+      var(--color-base-content) 18%,
+      transparent
+    );
+  }
+</style>
+{% endblock %}
+
 {% block content %}
 <h1>
   {{ stream_name if stream_name else section_name|default("CMS Articles") }}

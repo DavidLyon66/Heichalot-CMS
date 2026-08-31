@@ -2,7 +2,9 @@
 <html
   lang="{{ user_lang|default('en') }}"
   dir="{{ 'rtl' if user_lang == 'he' else 'ltr' }}"
-  data-theme="{{ daisy_theme|default('business') }}">
+  {% if daisy_theme|default('-') != '-' %}
+  data-theme="{{ daisy_theme }}"
+  {% endif %}>
   <head>
   <meta charset="utf-8">
 
@@ -914,6 +916,49 @@
       background: #0d1214;
     }
 
+	/* DaisyUI theme compatibility — application UI only */
+	html[data-theme] body {
+		font-family:
+			ui-sans-serif,
+			system-ui,
+			sans-serif,
+			"Apple Color Emoji",
+			"Segoe UI Emoji";
+	}
+
+	html[data-theme] .app-navbar,
+	html[data-theme] .app-sidebar,
+	html[data-theme] .modal-box,
+	html[data-theme] .dropdown-content {
+		color: var(--color-base-content);
+	}
+
+	html[data-theme] .modal-box p,
+	html[data-theme] .modal-box label,
+	html[data-theme] .modal-box .label-text,
+	html[data-theme] .modal-box .label-text-alt {
+		color: var(--color-base-content);
+	}
+
+	/*
+	 * DaisyUI owns text colour for application controls.
+	 * This only applies while a real DaisyUI theme is selected.
+	 * "None" has no data-theme attribute, so the old Heichalot
+	 * colours remain completely unchanged.
+	 */
+	html[data-theme] .app-navbar a,
+	html[data-theme] .app-navbar button,
+	html[data-theme] .app-sidebar a,
+	html[data-theme] .app-sidebar button,
+	html[data-theme] .app-sidebar summary,
+	html[data-theme] .modal-box {
+		color: var(--color-base-content);
+	}
+	
+    html[data-theme] .app-sidebar .bg-primary {
+        color: var(--color-primary-content);
+    }
+    
   </style>
   <script src="https://unpkg.com/htmx.org@1.9.12"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
@@ -1697,7 +1742,14 @@
                 dim, nord, sunset, caramellatte, abyss, silk
               #}
 
+              <option
+                value="-"
+                {% if daisy_theme|default('-') == '-' %}selected{% endif %}>
+                None
+              </option>
+
               {% set daisy_themes = [
+				'aqua', 'bumblebee', 'synthwave', 'retro', 'autumn', 'lemonade', 'cyberpunk',
                 'dark',
                 'halloween',
                 'forest',
@@ -1871,11 +1923,17 @@
     const settingsEmail = document.getElementById("settings-email");
     const settingsPassword = document.getElementById("settings-password");
 
-    let settingsOriginalTheme = document.documentElement.getAttribute("data-theme") || "business";
+    let settingsOriginalTheme = document.documentElement.getAttribute("data-theme") || "-";
 
     function applyUiTheme(themeName) {
-      const resolved = String(themeName || "business").trim() || "business";
-      document.documentElement.setAttribute("data-theme", resolved);
+      const resolved = String(themeName || "-").trim() || "-";
+
+      if (resolved === "-") {
+        document.documentElement.removeAttribute("data-theme");
+      } else {
+        document.documentElement.setAttribute("data-theme", resolved);
+      }
+
       if (uiThemeSelect) {
         uiThemeSelect.value = resolved;
       }
@@ -1907,8 +1965,8 @@
           : "Password";
       }
 
-      applyUiTheme(display.theme || "business");
-      settingsOriginalTheme = document.documentElement.getAttribute("data-theme") || "business";
+      applyUiTheme(display.theme || "-");
+      settingsOriginalTheme = document.documentElement.getAttribute("data-theme") || "-";
 
       return data;
     }
@@ -1949,7 +2007,7 @@
                 passcode: settingsPassword ? settingsPassword.value : "",
               },
               display: {
-                theme: uiThemeSelect ? uiThemeSelect.value : "business",
+                theme: uiThemeSelect ? uiThemeSelect.value : "-",
               },
             }),
           });
@@ -1960,8 +2018,8 @@
             throw new Error(data.error || "Unable to save settings");
           }
 
-          applyUiTheme(data.display?.theme || uiThemeSelect?.value || "business");
-          settingsOriginalTheme = document.documentElement.getAttribute("data-theme") || "business";
+          applyUiTheme(data.display?.theme || uiThemeSelect?.value || "-");
+          settingsOriginalTheme = document.documentElement.getAttribute("data-theme") || "-";
 
           if (settingsPassword) {
             settingsPassword.value = "";

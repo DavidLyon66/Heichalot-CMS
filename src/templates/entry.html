@@ -112,6 +112,26 @@
 {% endif %}
 
 <style>
+  /*
+   * DaisyUI base surfaces for the entry page only.
+   *
+   * Keep this conditional on html[data-theme], exactly like index.html,
+   * so the "None" theme retains the original Heichalot behaviour.
+   */
+  html[data-theme] .app-content {
+    background: var(--color-base-100);
+  }
+
+  html[data-theme] .app-content main {
+    background: var(--color-base-200);
+    border: 1px solid var(--color-base-300);
+    color: var(--color-base-content);
+  }
+
+  html[data-theme] .entry-document-shell {
+    background: var(--color-base-200);
+  }
+
   .entry-toolbar {
     display: flex;
     gap: 0.75rem;
