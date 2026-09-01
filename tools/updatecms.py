@@ -124,6 +124,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     return parser
 
+def is_update_enabled(cfg) -> bool:
+    if not cfg.has_section("updatecms"):
+        return True
+
+    return cfg.getboolean(
+        "updatecms",
+        "enabled",
+        fallback=True,
+    )
 
 def get_configured_update_url(cfg, explicit_url: Optional[str]) -> str:
     if explicit_url:
@@ -429,6 +438,54 @@ def is_flush_allowed(cfg) -> bool:
         fallback=True,
     )
 
+def check_update_needed(
+    config_path: Optional[str] = None,
+    update_url: Optional[str] = None,
+) -> dict:
+    """
+    Check the remote CMS manifest without downloading or installing archives.
+
+    When [updatecms] enabled=false, return immediately without network access.
+    """
+    cfg, _cfg_path, paths = load_app_config(config_path)
+    local_version = read_local_version(paths.data_dir)
+
+    if not is_update_enabled(cfg):
+        return {
+            "schema": "heichalot.cms-update-status.v1",
+            "enabled": False,
+            "update_needed": False,
+            "local_version": local_version,
+            "latest_version": None,
+            "required_files": [],
+        }
+
+    email = get_update_email(cfg) or "free@heichalot.tech"
+    code = update_code_from_email(email)
+
+    _base_url, latest_url = latest_url_from_base_and_code(
+        get_configured_update_url(cfg, update_url),
+        code,
+    )
+
+    opener = build_url_opener()
+    latest_data = fetch_json(latest_url, opener)
+    selected_files = select_required_downloads(
+        latest_data,
+        local_archive_date=local_version,
+        flush=False,
+    )
+
+    return {
+        "schema": "heichalot.cms-update-status.v1",
+        "enabled": True,
+        "update_needed": bool(selected_files),
+        "local_version": local_version,
+        "latest_version": latest_manifest_date(latest_data),
+        "required_files": selected_files,
+    }
+
+
 def install_release(entry_dirs: list[Path], cms_dir: Path) -> None:
     cms_dir.mkdir(parents=True, exist_ok=True)
 
@@ -486,6 +543,12 @@ def run_update(
     flush: bool = False,
 ) -> int:
     cfg, cfg_path, paths = load_app_config(config_path)
+
+    if not is_update_enabled(cfg):
+        raise UpdateCMSError(
+            "CMS updating is disabled on this machine because "
+            "[updatecms] enabled=false."
+        )
 
     email = get_update_email(cfg) or "free@heichalot.tech"
 
