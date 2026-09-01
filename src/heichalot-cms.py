@@ -62,6 +62,7 @@ except Exception:
 
 from createentry import create_entry
 from rvpreview import generate_preview_images
+import updatecms
 
 from renderhtml import story_markdown_to_html
 
@@ -1308,6 +1309,46 @@ def api_settings():
     })
 
 
+@app.route("/api/cms/update-needed")
+def api_cms_update_needed():
+    try:
+        return jsonify(
+            updatecms.check_update_needed()
+        )
+    except Exception as exc:
+        return jsonify({
+            "error": str(exc),
+        }), 400
+
+
+@app.route(
+    "/api/cms/update",
+    methods=["POST"],
+)
+def api_cms_update():
+    try:
+        updatecms.run_update(
+            config_path=None,
+            update_url=None,
+            force=False,
+            dry_run=False,
+            flush=False,
+        )
+
+        # The updater changes the local CMS/database. Refresh the
+        # server's in-memory view before returning to the browser.
+        load_local_entries()
+
+        return jsonify({
+            "ok": True,
+        })
+
+    except Exception as exc:
+        return jsonify({
+            "error": str(exc),
+        }), 400
+
+
 @app.errorhandler(500)
 def internal_server_error(error):
     app.logger.error(
@@ -2243,15 +2284,18 @@ def crypto_api_wallet_remove(asset):
 @app.route("/crypto/api/wallet/update-needed")
 def crypto_api_wallet_update_needed():
     try:
+        config = wallet.load_config()
+
         return jsonify(
-            wallet.check_update_needed()
+            wallet.check_update_needed(
+                config
+            )
         )
     except Exception as exc:
         return jsonify({
             "error": str(exc),
         }), 400
-
-
+        
 @app.route(
     "/crypto/api/wallet/update-history",
     methods=["POST"],
@@ -2600,9 +2644,7 @@ def load_local_entries() -> None:
     finally:
         conn.close()
         
-from updatecms import ensure_entries_db
-
-ensure_entries_db(CONTENT_DB)
+updatecms.ensure_entries_db(CONTENT_DB)
 load_local_entries()
 
 
