@@ -44,7 +44,7 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(TOOLS_DIR))
 
 try:
-    from config import load_app_config
+    from config import load_app_config, write_config
     from renderhtml import (
         has_dialog_blocks,
         markdown_to_html,
@@ -60,7 +60,6 @@ except Exception as exc:  # pragma: no cover - user-facing startup error
 DEFAULT_UPDATE_URL = "https://heichalot.tech/cms/"
 LATEST_JSON_NAME = "latest.json"
 DOWNLOADED_ENTRY_START_ID = 1_000_000
-VERSION_FILENAME = "updatecms-version.json"
 
 
 class UpdateCMSError(Exception):
@@ -339,32 +338,20 @@ def download_file(url: str, dest_path: Path, opener) -> None:
         raise UpdateCMSError(f"Network error downloading {url}: {exc.reason}") from exc
 
 
-def version_path(data_dir: Path) -> Path:
-    return data_dir / VERSION_FILENAME
-
-
-def read_local_version(data_dir: Path) -> Optional[str]:
-    path = version_path(data_dir)
-    if not path.exists():
-        return None
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        version = data.get("version")
-        return str(version) if version is not None else None
-    except Exception:
+def read_local_version(cfg) -> Optional[str]:
+    if not cfg.has_section("updatecms"):
         return None
 
+    version = cfg.get("updatecms", "version", fallback="").strip()
+    return version or None
 
-def write_local_version(data_dir: Path, release: ReleaseInfo, latest_url: str, zip_url: str) -> None:
-    data_dir.mkdir(parents=True, exist_ok=True)
-    data = {
-        "version": release.version,
-        "entry_start_id": release.entry_start_id,
-        "notes": release.notes,
-        "latest_url": latest_url,
-        "zip_url": zip_url,
-    }
-    version_path(data_dir).write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+def write_local_version(cfg, cfg_path: Path, version: str) -> None:
+    if not cfg.has_section("updatecms"):
+        cfg.add_section("updatecms")
+
+    cfg.set("updatecms", "version", version)
+    write_config(cfg, cfg_path)
 
 
 def parse_entry_number(entry_name: str) -> Optional[int]:
@@ -448,7 +435,7 @@ def check_update_needed(
     When [updatecms] enabled=false, return immediately without network access.
     """
     cfg, _cfg_path, paths = load_app_config(config_path)
-    local_version = read_local_version(paths.data_dir)
+    local_version = read_local_version(cfg)
 
     if not is_update_enabled(cfg):
         return {
@@ -563,7 +550,7 @@ def run_update(
 
     latest_data = fetch_json(latest_url, opener)
 
-    local_version = read_local_version(paths.data_dir)
+    local_version = read_local_version(cfg)
     selected_files = select_required_downloads(
         latest_data,
         local_archive_date=local_version,
@@ -636,36 +623,16 @@ def run_update(
         entries_db_path=entries_db_path,
     )
 
-    write_local_manifest_version(
-        paths.data_dir,
-        latest_data,
-        latest_url,
-        selected_files,
+    write_local_version(
+        cfg,
+        cfg_path,
+        latest_manifest_date(latest_data),
     )
 
     print()
     print(f"CMS update complete. Installed version {latest_manifest_date(latest_data)}.")
     return 0
 
-
-def write_local_manifest_version(
-    data_dir: Path,
-    manifest: dict,
-    latest_url: str,
-    downloaded_files: list[str],
-) -> None:
-    data_dir.mkdir(parents=True, exist_ok=True)
-
-    data = {
-        "version": latest_manifest_date(manifest),
-        "latest_url": latest_url,
-        "downloaded_files": downloaded_files,
-    }
-
-    version_path(data_dir).write_text(
-        json.dumps(data, indent=2) + "\n",
-        encoding="utf-8",
-    )
 
 def latest_manifest_date(manifest: dict) -> str:
     dates = []

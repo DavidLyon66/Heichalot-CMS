@@ -403,17 +403,17 @@ def run_first_time_setup(config_path: Optional[Path] = None) -> configparser.Con
     return cfg
 
 
-def ensure_config(config_path: Optional[Path] = None) -> configparser.ConfigParser:
-    cfg_path = expand_path(config_path or default_config_path())
+def ensure_config(config_path: Path) -> configparser.ConfigParser:
+    cfg_path = expand_path(config_path)
+
     if not cfg_path.exists():
         return run_first_time_setup(cfg_path)
 
     cfg = read_config(cfg_path)
     ensure_config_defaults(cfg)
-    write_config(cfg, cfg_path)
     ensure_directories(cfg, cfg_path)
     return cfg
-
+    
 
 def ensure_config_defaults(cfg: configparser.ConfigParser) -> None:
     defaults = build_default_config()
@@ -439,7 +439,6 @@ def resolve_config_path(config_path: Optional[str | Path] = None) -> Path:
     if config_path:
         return expand_path(config_path)
     return default_config_path()
-
 
 def load_app_config(
     config_path: Optional[str | Path] = None,
