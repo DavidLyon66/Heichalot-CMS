@@ -1811,22 +1811,42 @@
 
   </dialog>
 
-  {# Placeholder update dialogs. They can be replaced by the real
-     update/progress implementation without changing the navbar. #}
+  {% if server_variant != "hosted" %}
   <dialog id="cms_update_dialog" class="modal">
     <div class="modal-box">
       <h3 class="text-lg font-bold">CMS Update</h3>
-      <p class="py-2 opacity-70">A CMS content update is available.</p>
+
+      <p class="mt-2 text-sm opacity-70">
+        CMS content update available. Update now?
+      </p>
+
+      <div
+        id="cms-update-detail"
+        class="mt-2 text-xs opacity-50">
+      </div>
+
       <div class="modal-action">
-        <form method="dialog">
-          <button class="btn">Close</button>
-        </form>
+        <button
+          id="cms-update-cancel"
+          type="button"
+          class="btn btn-ghost">
+          Cancel
+        </button>
+
+        <button
+          id="cms-update-ok"
+          type="button"
+          class="btn btn-primary">
+          Update
+        </button>
       </div>
     </div>
+
     <form method="dialog" class="modal-backdrop">
       <button>Close</button>
     </form>
   </dialog>
+  {% endif %}
 
   <dialog id="crypto_update_dialog" class="modal">
     <div class="modal-box">
@@ -1929,6 +1949,13 @@
     const settingsUserId = document.getElementById("settings-user-id");
     const settingsEmail = document.getElementById("settings-email");
     const settingsPassword = document.getElementById("settings-password");
+
+    {% if server_variant != "hosted" %}
+    const cmsUpdateDialog = document.getElementById("cms_update_dialog");
+    const cmsUpdateOk = document.getElementById("cms-update-ok");
+    const cmsUpdateCancel = document.getElementById("cms-update-cancel");
+    const cmsUpdateDetail = document.getElementById("cms-update-detail");
+    {% endif %}
 
     let settingsOriginalTheme = document.documentElement.getAttribute("data-theme") || "-";
 
@@ -2054,11 +2081,114 @@
       });
     }
 
-    // Load the saved theme without delaying initial page rendering.
+    {% if server_variant != "hosted" %}
+    async function checkCmsUpdateNeeded() {
+      try {
+        const response = await fetch(
+          "/api/cms/update-needed",
+          {headers: {"Accept": "application/json"}}
+        );
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || `HTTP ${response.status}`);
+        }
+
+        if (!data || !data.enabled || !data.update_needed) {
+          return;
+        }
+
+        if (cmsUpdateDetail) {
+          const localVersion = data.local_version || "none";
+          const latestVersion = data.latest_version || "unknown";
+          const count = Array.isArray(data.required_files)
+            ? data.required_files.length
+            : 0;
+
+          cmsUpdateDetail.textContent =
+            `Local: ${localVersion} · Latest: ${latestVersion}` +
+            (count ? ` · ${count} archive${count === 1 ? "" : "s"}` : "");
+        }
+
+        cmsUpdateDialog?.showModal();
+
+      } catch (error) {
+        console.error(
+          "Unable to check CMS update status:",
+          error
+        );
+      }
+    }
+
+
+    async function updateCmsContent() {
+      if (!cmsUpdateOk) {
+        return;
+      }
+
+      cmsUpdateOk.disabled = true;
+      cmsUpdateOk.textContent = "Updating...";
+
+      if (cmsUpdateDetail) {
+        cmsUpdateDetail.textContent =
+          "Downloading and installing CMS content...";
+      }
+
+      try {
+        const response = await fetch(
+          "/api/cms/update",
+          {
+            method: "POST",
+            headers: {"Accept": "application/json"}
+          }
+        );
+
+        const data = await response.json();
+
+        if (!response.ok || !data.ok) {
+          throw new Error(data.error || `HTTP ${response.status}`);
+        }
+
+        cmsUpdateDialog?.close();
+        window.location.reload();
+
+      } catch (error) {
+        console.error("Unable to update CMS:", error);
+        showToast(error.message || "CMS update failed", "error");
+        cmsUpdateOk.disabled = false;
+        cmsUpdateOk.textContent = "Update";
+      }
+    }
+
+
+    if (cmsUpdateOk) {
+      cmsUpdateOk.addEventListener(
+        "click",
+        updateCmsContent
+      );
+    }
+
+    if (cmsUpdateCancel) {
+      cmsUpdateCancel.addEventListener(
+        "click",
+        function () {
+          cmsUpdateDialog?.close();
+        }
+      );
+    }
+    {% endif %}
+
+    // Load local settings and check for CMS content updates without
+    // delaying the initial page rendering.
     window.addEventListener("DOMContentLoaded", function () {
       loadLocalSettings().catch(function () {
         // Staying on the template/default theme is fine if settings are unavailable.
       });
+
+      {% if server_variant != "hosted" %}
+      checkCmsUpdateNeeded();
+      {% endif %}
     });
 	  
 	function showToast(message, level = "success") {
