@@ -244,6 +244,16 @@ def create_linux_application_entry(project_root: str | Path) -> Path:
 
     desktop_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     desktop_path.chmod(0o755)
+
+    refresh_tool = shutil.which("update-desktop-database")
+    if refresh_tool:
+        import subprocess
+
+        subprocess.run(
+            [refresh_tool, str(applications_dir)],
+            check=False,
+        )
+
     return desktop_path
 
 
