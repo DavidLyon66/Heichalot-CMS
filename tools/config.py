@@ -36,7 +36,11 @@ from urllib.request import urlopen
 console = Console()
 
 APP_NAME = "HeichalotCMS"
+APP_DISPLAY_NAME = "Heichalot CMS"
 APP_SLUG = "heichalotcms"
+APP_DESCRIPTION = "Heichalot Content Management System"
+APP_BUNDLE_ID = "tech.heichalot.cms"
+APP_PROGRAM_CANDIDATES = ("heichalot-cms.exe", "heichalot-cms.py")
 CONFIG_FILENAME = "config.ini"
 CONFIG_TEMPLATE_NAME = "config.ini.j2"
 
@@ -136,7 +140,207 @@ def default_config_path() -> Path:
     
 
 def default_user_cms_dir() -> Path:
-    return Path.home() / "Documents" / "heichalot-cms" / "cms"
+    return Path.home() / "Documents" / "Heichalot-CMS" / "cms"
+
+def find_application_program(project_root: str | Path) -> Path | None:
+    """Find the preferred desktop entry point in a checkout.
+
+    The packaged Windows executable deliberately wins when both forms are
+    present.  A source checkout falls back to ``heichalot-cms.py``.  We do
+    not discover or record a Python/Conda interpreter here: a user running
+    the source form is responsible for having the .py entry point runnable
+    on their operating system.
+    """
+    root = expand_path(project_root)
+
+    for name in APP_PROGRAM_CANDIDATES:
+        candidate = root / name
+        if candidate.is_file():
+            return candidate
+
+    return None
+
+
+def _required_application_program(project_root: str | Path) -> Path:
+    program = find_application_program(project_root)
+    if program is not None:
+        return program
+
+    names = ", ".join(APP_PROGRAM_CANDIDATES)
+    raise FileNotFoundError(
+        f"Cannot register {APP_DISPLAY_NAME}: none of these application "
+        f"entry points exists in {expand_path(project_root)}: {names}"
+    )
+
+
+def _find_application_icon(project_root: str | Path) -> Path | None:
+    """Return a likely application icon if one is present in the checkout."""
+    root = expand_path(project_root)
+    candidates = (
+        root / "server-side" / "icons" / "heichalot-cms.png",
+        root / "server-side" / "icons" / "heichalotcms.png",
+        root / "icons" / "heichalot-cms.png",
+        root / "icons" / "heichalotcms.png",
+        root / "heichalot-cms.png",
+    )
+
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+
+    return None
+
+
+def _desktop_exec_quote(value: str | Path) -> str:
+    """Quote one Desktop Entry Exec argument without invoking a shell."""
+    text = str(value)
+    text = text.replace("\\", "\\\\")
+    text = text.replace('"', '\\"')
+    text = text.replace("`", "\\`")
+    text = text.replace("$", "\\$")
+    return f'"{text}"'
+
+
+def create_linux_application_entry(project_root: str | Path) -> Path:
+    """Register Heichalot CMS in the current Linux user's application menu.
+
+    The generated ``.desktop`` file points directly at whichever supported
+    program exists in the checkout.  No Python interpreter is guessed.
+    """
+    program = _required_application_program(project_root)
+    icon = _find_application_icon(project_root)
+
+    applications_dir = Path(
+        os.environ.get(
+            "XDG_DATA_HOME",
+            str(Path.home() / ".local" / "share"),
+        )
+    ).expanduser() / "applications"
+    applications_dir.mkdir(parents=True, exist_ok=True)
+
+    desktop_path = applications_dir / "heichalot-cms.desktop"
+    lines = [
+        "[Desktop Entry]",
+        "Version=1.0",
+        "Type=Application",
+        f"Name={APP_DISPLAY_NAME}",
+        f"Comment={APP_DESCRIPTION}",
+        f"Exec={_desktop_exec_quote(program)}",
+        f"TryExec={program}",
+        "Terminal=false",
+        "Categories=Office;Utility;",
+        "StartupNotify=true",
+    ]
+    if icon is not None:
+        lines.insert(7, f"Icon={icon}")
+
+    desktop_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    desktop_path.chmod(0o755)
+    return desktop_path
+
+
+def register_windows_application(project_root: str | Path) -> str:
+    r"""Register Heichalot CMS for the current Windows user.
+
+    This follows Microsoft's per-user App Paths registration model::
+
+        HKCU\Software\Microsoft\Windows\CurrentVersion\App Paths\<program>
+
+    The default REG_SZ value is the fully-qualified path to the discovered
+    application entry point.  ``heichalot.exe`` wins over
+    ``heichalot-cms.py``.  In source checkouts the .py path is registered
+    directly; this function deliberately does not locate Python or Conda.
+
+    Per-user HKCU registration avoids requiring administrator privileges and
+    avoids modifying the global PATH.
+    """
+    if os.name != "nt":
+        raise OSError("Windows application registration is only available on Windows")
+
+    import winreg
+
+    program = _required_application_program(project_root)
+    key_path = (
+        "Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\"
+        + program.name
+    )
+
+    with winreg.CreateKeyEx(
+        winreg.HKEY_CURRENT_USER,
+        key_path,
+        0,
+        winreg.KEY_SET_VALUE,
+    ) as key:
+        winreg.SetValueEx(
+            key,
+            "",
+            0,
+            winreg.REG_SZ,
+            str(program),
+        )
+
+    return rf"HKCU\{key_path}"
+
+
+def create_macos_application_entry(project_root: str | Path) -> Path:
+    """Create a minimal per-user macOS .app wrapper around the entry point.
+
+    This is intentionally lightweight bootstrap integration rather than a
+    packaged installer.  The wrapper executes the discovered program
+    directly and does not try to discover a Python/Conda interpreter.
+    """
+    import plistlib
+    import shlex
+
+    program = _required_application_program(project_root)
+    app_path = Path.home() / "Applications" / f"{APP_DISPLAY_NAME}.app"
+    contents = app_path / "Contents"
+    macos_dir = contents / "MacOS"
+    macos_dir.mkdir(parents=True, exist_ok=True)
+
+    launcher_name = APP_SLUG
+    launcher_path = macos_dir / launcher_name
+    launcher_path.write_text(
+        "#!/bin/sh\n"
+        f"exec {shlex.quote(str(program))} \"$@\"\n",
+        encoding="utf-8",
+    )
+    launcher_path.chmod(0o755)
+
+    plist = {
+        "CFBundleDevelopmentRegion": "en",
+        "CFBundleDisplayName": APP_DISPLAY_NAME,
+        "CFBundleExecutable": launcher_name,
+        "CFBundleIdentifier": APP_BUNDLE_ID,
+        "CFBundleName": APP_DISPLAY_NAME,
+        "CFBundlePackageType": "APPL",
+        "CFBundleVersion": "1",
+        "CFBundleShortVersionString": "1.0",
+    }
+    with (contents / "Info.plist").open("wb") as handle:
+        plistlib.dump(plist, handle)
+
+    return app_path
+
+
+def install_platform_integration(project_root: str | Path) -> Path | str:
+    """Register the current checkout as an application for this user.
+
+    Linux creates ``~/.local/share/applications/heichalot-cms.desktop`` (or
+    the XDG_DATA_HOME equivalent).  Windows writes the per-user App Paths
+    registry key documented by Microsoft.  macOS creates a small .app bundle
+    in ``~/Applications``.  This function must only be called after explicit
+    user approval.
+    """
+    if os.name == "nt":
+        return register_windows_application(project_root)
+    if sys.platform == "darwin":
+        return create_macos_application_entry(project_root)
+    if sys.platform.startswith("linux"):
+        return create_linux_application_entry(project_root)
+
+    raise OSError(f"Application registration is not supported on {sys.platform!r}")
+
 
 def read_config(path: Optional[Path] = None) -> configparser.ConfigParser:
     cfg = configparser.ConfigParser()
@@ -296,6 +500,34 @@ def prompt_path(label: str, default: Path) -> Path:
     return expand_path(value)
 
 
+def install_initial_config(
+    cms_dir: str | Path,
+    config_path: Optional[Path] = None,
+    *,
+    project_root: Optional[Path] = None,
+    data_dir: Optional[Path] = None,
+) -> configparser.ConfigParser:
+    """Create the initial config without prompting.
+
+    This is intended for GUI/web first-run setup. Nothing is written until
+    the caller has obtained explicit user approval.
+    """
+    cfg_path = expand_path(config_path or default_config_path())
+    cms_root = expand_path(cms_dir)
+    project_root = expand_path(project_root or Path.cwd())
+    data_root = expand_path(data_dir or platform_data_dir())
+
+    cfg = render_config_template(
+        project_root=project_root,
+        cms_dir=cms_root,
+        data_dir=data_root,
+    )
+    ensure_config_defaults(cfg)
+    write_config(cfg, cfg_path)
+    ensure_directories(cfg, cfg_path)
+    return cfg
+
+
 def run_first_time_setup(config_path: Optional[Path] = None) -> configparser.ConfigParser:
     cfg_path = expand_path(config_path or default_config_path())
 
@@ -407,7 +639,9 @@ def ensure_config(config_path: Path) -> configparser.ConfigParser:
     cfg_path = expand_path(config_path)
 
     if not cfg_path.exists():
-        return run_first_time_setup(cfg_path)
+        raise FileNotFoundError(
+            f"Heichalot-CMS is not configured yet: {cfg_path}"
+        )
 
     cfg = read_config(cfg_path)
     ensure_config_defaults(cfg)
@@ -1725,15 +1959,27 @@ def main() -> int:
     parser.add_argument("--config", help="Override config path")
     parser.add_argument("--setup", action="store_true", help="Run first-time setup")
     parser.add_argument("--show", action="store_true", help="Show resolved paths")
+    parser.add_argument(
+        "--register-application",
+        action="store_true",
+        help="Create or repair per-user OS application registration",
+    )
     args = parser.parse_args()
 
     cfg_path = expand_path(args.config) if args.config else default_config_path()
 
     # Default action is --show
-    show_requested = args.show or not args.setup
+    show_requested = args.show or not (args.setup or args.register_application)
 
     if args.setup:
         run_first_time_setup(cfg_path)
+        return 0
+
+    if args.register_application:
+        cfg = read_config(cfg_path)
+        paths = resolve_paths(cfg, cfg_path)
+        registered = install_platform_integration(paths.project_root)
+        console.print(f"[green]Application registration:[/green] {registered}")
         return 0
 
     if show_requested:
