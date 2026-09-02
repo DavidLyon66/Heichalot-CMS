@@ -25,6 +25,7 @@ from flask import (
     flash,
     redirect,
     render_template,
+    render_template_string,
     request,
     send_from_directory,
     session,
@@ -51,6 +52,9 @@ from config import (load_app_config,
                     resolve_location, 
                     read_config, 
                     default_config_path,
+                    default_user_cms_dir,
+                    install_initial_config,
+                    install_platform_integration,
                     detect_llm_system)
 
 try:
@@ -107,14 +111,6 @@ CRYPTO_AVAILABLE_LAYERS = [
     ("shapedetect", "Detected historical or projected channel shape.", ),
     ("whalecheck",  "Investigation of unusual market activity and possible large-participant influence.", ),
 ]
-
-
-IMAGE_DIR = Path(os.environ.get("HEICHALOT_IMAGE_DIR", APP_DIR / "images")).expanduser()
-PDF_DIR = Path(os.environ.get("HEICHALOT_PDF_DIR", APP_DIR / "pdfs")).expanduser()
-
-CMS_UPDATE_DIR = Path(
-    os.environ.get("HEICHALOT_CMS_UPDATE_DIR", APP_DIR / "content-updates")
-).expanduser()
 
 
 
@@ -200,7 +196,6 @@ name = brown
 """
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("HEICHALOT_SECRET_KEY", "dev-change-this-secret-key")
 
 # Exposed to every Jinja template through inject_globals().
 # Only the hosted server presents account/login/registration controls.
@@ -832,6 +827,173 @@ def user_config_parser(user=None) -> configparser.ConfigParser:
     return read_config()
     
 
+# A missing config is a first-run state, not permission to install anything.
+# Cancel deliberately leaves this process unconfigured and allows normal
+# routes to continue; some of them may consequently fail until setup is run.
+_first_run_cancelled = False
+
+
+def _display_home_path(path: Path) -> str:
+    try:
+        relative = path.expanduser().relative_to(Path.home())
+        return str(Path("~") / relative)
+    except ValueError:
+        return str(path)
+
+
+@app.before_request
+def require_initial_setup():
+    if default_config_path().exists() or _first_run_cancelled:
+        return None
+
+    if request.endpoint in {"initial_setup", "static"}:
+        return None
+
+    return redirect(url_for("initial_setup"))
+
+
+@app.route("/setup", methods=["GET", "POST"])
+def initial_setup():
+    global _first_run_cancelled
+
+    cfg_path = default_config_path()
+    proposed_cms_dir = default_user_cms_dir()
+
+    if cfg_path.exists():
+        return redirect(url_for("index"))
+
+    if request.method == "POST":
+        action = str(request.form.get("action", "cancel")).strip().lower()
+
+        if action != "ok":
+            _first_run_cancelled = True
+            return render_template_string(
+                FIRST_RUN_CANCELLED_HTML,
+                config_path=str(cfg_path),
+            )
+
+        cms_value = str(request.form.get("cms_dir", "")).strip()
+        if not cms_value:
+            cms_value = str(proposed_cms_dir)
+
+        register_application = bool(request.form.get("register_application"))
+        download_updates = bool(request.form.get("download_updates"))
+
+        try:
+            install_initial_config(
+                cms_value,
+                cfg_path,
+                project_root=REPO_ROOT,
+            )
+
+            if register_application:
+                install_platform_integration(REPO_ROOT)
+
+            if download_updates:
+                updatecms.run_update(
+                    config_path=cfg_path,
+                    update_url=None,
+                    force=False,
+                    dry_run=False,
+                    flush=False,
+                )
+
+            updatecms.ensure_entries_db(CONTENT_DB)
+            load_local_entries()
+
+        except Exception as exc:
+            # If config creation itself failed, no successful installation has
+            # occurred. A later retry should still return to this setup page.
+            return render_template_string(
+                FIRST_RUN_SETUP_HTML,
+                cms_dir=cms_value,
+                config_path=str(cfg_path),
+                register_application=register_application,
+                download_updates=download_updates,
+                error=str(exc),
+            ), 500
+
+        return redirect(url_for("index"))
+
+    return render_template_string(
+        FIRST_RUN_SETUP_HTML,
+        cms_dir=_display_home_path(proposed_cms_dir),
+        config_path=str(cfg_path),
+        register_application=True,
+        download_updates=False,
+        error=None,
+    )
+
+
+
+FIRST_RUN_SETUP_HTML = r"""
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Heichalot-CMS Setup</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; }
+    body { margin:0; min-height:100vh; display:grid; place-items:center; background:#171717; color:#eee; }
+    .dialog { width:min(640px, calc(100vw - 32px)); background:#242424; border:1px solid #555; border-radius:12px; padding:24px; box-shadow:0 18px 60px #0008; }
+    h1 { margin:0 0 8px; font-size:1.35rem; }
+    p { color:#bbb; }
+    label { display:block; margin:18px 0 6px; font-weight:600; }
+    input[type=text] { width:100%; box-sizing:border-box; padding:10px 12px; border-radius:7px; border:1px solid #666; background:#151515; color:#fff; }
+    .check { display:flex; gap:10px; align-items:center; font-weight:400; }
+    .buttons { display:flex; justify-content:flex-end; gap:10px; margin-top:24px; }
+    button { min-width:90px; padding:9px 16px; border-radius:7px; border:1px solid #666; cursor:pointer; }
+    .ok { background:#eee; color:#111; }
+    .cancel { background:#333; color:#eee; }
+    .error { padding:10px 12px; border:1px solid #a55; background:#3a2020; border-radius:7px; color:#ffd6d6; }
+    .config { font-size:.82rem; color:#888; margin-top:14px; overflow-wrap:anywhere; }
+  </style>
+</head>
+<body>
+  <form class="dialog" method="post">
+    <h1>Initial installation setup</h1>
+    <p>Heichalot-CMS has not been configured on this computer.</p>
+    {% if error %}<div class="error">{{ error }}</div>{% endif %}
+
+    <label for="cms_dir">Location of CMS data</label>
+    <input id="cms_dir" name="cms_dir" type="text" value="{{ cms_dir }}" autocomplete="off">
+
+    <label class="check">
+      <input name="download_updates" type="checkbox" value="1" {% if download_updates %}checked{% endif %}>
+      Download CMS updates now
+    </label>
+
+    <label class="check">
+      <input name="register_application" type="checkbox" value="1" {% if register_application %}checked{% endif %}>
+      Register Heichalot CMS with this computer
+    </label>
+
+    <div class="config">Configuration will be stored at {{ config_path }}</div>
+
+    <div class="buttons">
+      <button class="cancel" type="submit" name="action" value="cancel">Cancel</button>
+      <button class="ok" type="submit" name="action" value="ok">OK</button>
+    </div>
+  </form>
+</body>
+</html>
+"""
+
+
+FIRST_RUN_CANCELLED_HTML = r"""
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Setup cancelled</title></head>
+<body style="font-family:system-ui,sans-serif;background:#171717;color:#eee;padding:2rem">
+  <h1>Setup cancelled</h1>
+  <p>No configuration was written. Heichalot-CMS will continue unconfigured for this run, so some functions may not work.</p>
+  <p>Expected configuration location: {{ config_path }}</p>
+  <p><a href="/" style="color:#ddd">Continue</a> &nbsp; <a href="/setup" style="color:#ddd">Run setup</a></p>
+</body>
+</html>
+"""
+
 @app.context_processor
 def inject_globals():
     return {
@@ -1023,6 +1185,18 @@ def entry(entry_id: str):
         else:
             html = next(iter(rendered_stories.values()))
     
+    metadata = parse_yaml_header(row["yaml_header"])
+    entry_kind = normalise_filter_value(
+        metadata.get("kind")
+        or metadata.get("type")
+        or ""
+    )
+    youtube_url = None
+    if entry_kind in {"youtube", "a-youtube-video"}:
+        candidate = str(metadata.get("source_url") or "").strip()
+        if candidate.startswith(("https://www.youtube.com/", "https://youtube.com/", "https://youtu.be/")):
+            youtube_url = candidate
+
     return render_template(
         "entry.html",
         entry=row,
@@ -1030,6 +1204,7 @@ def entry(entry_id: str):
         user_level=user_level,
         required_level=row["access_level"],
         related=related,
+        youtube_url=youtube_url,
     )
 
 @app.get("/entry/<entry_id>/image/<filename>")
@@ -2644,8 +2819,10 @@ def load_local_entries() -> None:
     finally:
         conn.close()
         
-updatecms.ensure_entries_db(CONTENT_DB)
-load_local_entries()
+# Do not create data/config directories before the user approves first-run setup.
+if default_config_path().exists():
+    updatecms.ensure_entries_db(CONTENT_DB)
+    load_local_entries()
 
 
 def run_flask():
