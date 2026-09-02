@@ -204,11 +204,19 @@ def _desktop_exec_quote(value: str | Path) -> str:
 def create_linux_application_entry(project_root: str | Path) -> Path:
     """Register Heichalot CMS in the current Linux user's application menu.
 
-    The generated ``.desktop`` file points directly at whichever supported
-    program exists in the checkout.  No Python interpreter is guessed.
+    Native executables are launched directly.  Source checkouts use the
+    system ``python3`` command to launch ``src/heichalot-cms.py`` so the
+    generated Python file itself does not need to be marked executable.
     """
     program = _required_application_program(project_root)
     icon = _find_application_icon(project_root)
+
+    if program.suffix.lower() == ".py":
+        exec_line = f"python3 {_desktop_exec_quote(program)}"
+        try_exec = "python3"
+    else:
+        exec_line = _desktop_exec_quote(program)
+        try_exec = str(program)
 
     applications_dir = Path(
         os.environ.get(
@@ -225,10 +233,10 @@ def create_linux_application_entry(project_root: str | Path) -> Path:
         "Type=Application",
         f"Name={APP_DISPLAY_NAME}",
         f"Comment={APP_DESCRIPTION}",
-        f"Exec={_desktop_exec_quote(program)}",
-        f"TryExec={program}",
+        f"Exec={exec_line}",
+        f"TryExec={try_exec}",
         "Terminal=false",
-        "Categories=Office;Utility;",
+        "Categories=Office;Development;Utility;",
         "StartupNotify=true",
     ]
     if icon is not None:
