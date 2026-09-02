@@ -40,7 +40,7 @@ APP_DISPLAY_NAME = "Heichalot CMS"
 APP_SLUG = "heichalotcms"
 APP_DESCRIPTION = "Heichalot Content Management System"
 APP_BUNDLE_ID = "tech.heichalot.cms"
-APP_PROGRAM_CANDIDATES = ("heichalot-cms.exe", "heichalot-cms.py")
+APP_PROGRAM_CANDIDATES = ("heichalot-cms.exe", "src/heichalot-cms.py")
 CONFIG_FILENAME = "config.ini"
 CONFIG_TEMPLATE_NAME = "config.ini.j2"
 
