@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import shutil
+import subprocess
 import sqlite3
 import yaml
 from pathlib import Path
@@ -877,7 +879,6 @@ def initial_setup():
             cms_value = str(proposed_cms_dir)
 
         register_application = bool(request.form.get("register_application"))
-        download_updates = bool(request.form.get("download_updates"))
 
         try:
             install_initial_config(
@@ -888,15 +889,6 @@ def initial_setup():
 
             if register_application:
                 install_platform_integration(REPO_ROOT)
-
-            if download_updates:
-                updatecms.run_update(
-                    config_path=cfg_path,
-                    update_url=None,
-                    force=False,
-                    dry_run=False,
-                    flush=False,
-                )
 
             updatecms.ensure_entries_db(CONTENT_DB)
             load_local_entries()
@@ -909,7 +901,6 @@ def initial_setup():
                 cms_dir=cms_value,
                 config_path=str(cfg_path),
                 register_application=register_application,
-                download_updates=download_updates,
                 error=str(exc),
             ), 500
 
@@ -920,7 +911,6 @@ def initial_setup():
         cms_dir=_display_home_path(proposed_cms_dir),
         config_path=str(cfg_path),
         register_application=True,
-        download_updates=False,
         error=None,
     )
 
@@ -958,11 +948,6 @@ FIRST_RUN_SETUP_HTML = r"""
 
     <label for="cms_dir">Location of CMS data</label>
     <input id="cms_dir" name="cms_dir" type="text" value="{{ cms_dir }}" autocomplete="off">
-
-    <label class="check">
-      <input name="download_updates" type="checkbox" value="1" {% if download_updates %}checked{% endif %}>
-      Download CMS updates now
-    </label>
 
     <label class="check">
       <input name="register_application" type="checkbox" value="1" {% if register_application %}checked{% endif %}>
@@ -2002,6 +1987,108 @@ def save_selected_working_session_to_cms(
 
     return entry_id, story_path
 
+@app.route("/api/system/update-source", methods=["POST"])
+def api_update_source():
+    """Update an open-source Heichalot-CMS checkout using git."""
+
+    git = shutil.which("git")
+    if not git:
+        return jsonify({
+            "ok": False,
+            "error": "Git is not installed or is not available on PATH.",
+        }), 500
+
+    repo_root = Path(REPO_ROOT).resolve()
+
+    if not (repo_root / ".git").exists():
+        return jsonify({
+            "ok": False,
+            "error": "This installation is not a Git source checkout.",
+        }), 400
+
+    try:
+        # Do not overwrite or merge around local work.
+        status = subprocess.run(
+            [git, "status", "--porcelain"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+
+        if status.returncode != 0:
+            return jsonify({
+                "ok": False,
+                "error": status.stderr.strip() or "Unable to inspect Git checkout.",
+            }), 500
+
+        if status.stdout.strip():
+            return jsonify({
+                "ok": False,
+                "error": "Source checkout contains local changes.",
+                "details": status.stdout.strip(),
+            }), 409
+
+        before = subprocess.run(
+            [git, "rev-parse", "HEAD"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=True,
+        ).stdout.strip()
+
+        result = subprocess.run(
+            [git, "pull", "--ff-only"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=180,
+            check=False,
+        )
+
+        after_result = subprocess.run(
+            [git, "rev-parse", "HEAD"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+        after = after_result.stdout.strip() or before
+
+        if result.returncode != 0:
+            return jsonify({
+                "ok": False,
+                "error": "Git update failed.",
+                "output": result.stdout.strip(),
+                "details": result.stderr.strip(),
+            }), 500
+
+        changed = before != after
+
+        return jsonify({
+            "ok": True,
+            "changed": changed,
+            "restart_required": changed,
+            "before": before,
+            "after": after,
+            "output": result.stdout.strip(),
+        })
+
+    except subprocess.TimeoutExpired:
+        return jsonify({
+            "ok": False,
+            "error": "Source update timed out.",
+        }), 504
+
+    except Exception as exc:
+        return jsonify({
+            "ok": False,
+            "error": str(exc),
+        }), 500
+        
 @app.get("/api/remote-view/preview-image/<filename>")
 def api_remote_view_preview_image(filename: str):
 
