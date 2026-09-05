@@ -260,24 +260,22 @@ def create_linux_application_entry(project_root: str | Path) -> Path:
 def register_windows_application(project_root: str | Path) -> str:
     r"""Register Heichalot CMS for the current Windows user.
 
-    This follows Microsoft's per-user App Paths registration model::
+    Register the discovered entry point with the per-user App Paths registry
+    and create a Start Menu shortcut for the current user.  Source checkouts
+    launch the .py entry point with the Python interpreter running this setup;
+    packaged .exe installs launch the executable directly.
 
-        HKCU\Software\Microsoft\Windows\CurrentVersion\App Paths\<program>
-
-    The default REG_SZ value is the fully-qualified path to the discovered
-    application entry point.  ``heichalot.exe`` wins over
-    ``heichalot-cms.py``.  In source checkouts the .py path is registered
-    directly; this function deliberately does not locate Python or Conda.
-
-    Per-user HKCU registration avoids requiring administrator privileges and
-    avoids modifying the global PATH.
+    Everything is per-user, so administrator privileges are not required and
+    the global PATH is not modified.
     """
     if os.name != "nt":
         raise OSError("Windows application registration is only available on Windows")
 
+    import subprocess
     import winreg
 
-    program = _required_application_program(project_root)
+    root = expand_path(project_root)
+    program = _required_application_program(root)
     key_path = (
         "Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\"
         + program.name
@@ -297,7 +295,58 @@ def register_windows_application(project_root: str | Path) -> str:
             str(program),
         )
 
-    return rf"HKCU\{key_path}"
+    appdata = os.environ.get("APPDATA") or str(
+        Path.home() / "AppData" / "Roaming"
+    )
+    programs_dir = (
+        Path(appdata)
+        / "Microsoft"
+        / "Windows"
+        / "Start Menu"
+        / "Programs"
+    )
+    programs_dir.mkdir(parents=True, exist_ok=True)
+    shortcut_path = programs_dir / f"{APP_DISPLAY_NAME}.lnk"
+
+    if program.suffix.lower() == ".py":
+        target = Path(sys.executable).resolve()
+        arguments = f'"{program}"'
+    else:
+        target = program
+        arguments = ""
+
+    powershell = shutil.which("powershell.exe") or shutil.which("powershell")
+    if powershell is None:
+        raise FileNotFoundError(
+            "Cannot create the Windows Start Menu shortcut: PowerShell was not found"
+        )
+
+    shortcut_env = os.environ.copy()
+    shortcut_env.update(
+        {
+            "HEICHALOT_SHORTCUT": str(shortcut_path),
+            "HEICHALOT_TARGET": str(target),
+            "HEICHALOT_ARGUMENTS": arguments,
+            "HEICHALOT_WORKDIR": str(root),
+            "HEICHALOT_DESCRIPTION": APP_DESCRIPTION,
+        }
+    )
+    powershell_script = (
+        "$shell = New-Object -ComObject WScript.Shell; "
+        "$shortcut = $shell.CreateShortcut($env:HEICHALOT_SHORTCUT); "
+        "$shortcut.TargetPath = $env:HEICHALOT_TARGET; "
+        "$shortcut.Arguments = $env:HEICHALOT_ARGUMENTS; "
+        "$shortcut.WorkingDirectory = $env:HEICHALOT_WORKDIR; "
+        "$shortcut.Description = $env:HEICHALOT_DESCRIPTION; "
+        "$shortcut.Save()"
+    )
+    subprocess.run(
+        [powershell, "-NoProfile", "-NonInteractive", "-Command", powershell_script],
+        check=True,
+        env=shortcut_env,
+    )
+
+    return rf"HKCU\{key_path}; Start Menu: {shortcut_path}"
 
 
 def create_macos_application_entry(project_root: str | Path) -> Path:
