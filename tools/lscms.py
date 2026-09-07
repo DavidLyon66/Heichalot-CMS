@@ -825,11 +825,18 @@ def export_entries_json(
             default_flow_style=False,
         ).strip()
 
-        stream_name = (
+        raw_stream = (
             metadata.get("stream_name")
             or metadata.get("stream")
             or ""
-        ).strip()
+        )
+
+        if isinstance(raw_stream, (list, tuple, set)):
+            stream_name = str(
+                next(iter(raw_stream), "")
+            ).strip()
+        else:
+            stream_name = str(raw_stream).strip()
 
         status = (
             metadata.get("status")
