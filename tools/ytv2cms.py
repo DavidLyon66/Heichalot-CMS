@@ -29,13 +29,20 @@ constructing its own partial YAML header.
 from __future__ import annotations
 
 import argparse
+import configparser
 import re
+import shutil
 import sys
 import textwrap
 from pathlib import Path
 from typing import Sequence
 
 from youtube_transcript_api import YouTubeTranscriptApi
+
+try:
+    import yt_dlp
+except ImportError:
+    yt_dlp = None
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -239,19 +246,36 @@ def parse_tags(text: str) -> list[str]:
     return tags
 
 
-def prompt_title(video_id: str, supplied: str | None = None) -> str:
+def fetch_video_title(url_or_id: str, supplied: str | None = None) -> str:
+    """Return an explicit title override or fetch the YouTube title with yt-dlp."""
+
     if supplied and supplied.strip():
         return supplied.strip()
 
-    while True:
-        title = input("Title: ").strip()
-        if title:
-            return title
+    if yt_dlp is None:
+        raise RuntimeError(
+            "yt-dlp is not installed for this Python. Install it with: "
+            "python3 -m pip install yt-dlp"
+        )
 
-        fallback = f"YouTube Import ({video_id})"
-        answer = input(f"Use fallback title '{fallback}'? [y/N]: ").strip().lower()
-        if answer in {"y", "yes"}:
-            return fallback
+    target = str(url_or_id).strip()
+    if re.fullmatch(r"[A-Za-z0-9_-]{11}", target):
+        target = f"https://www.youtube.com/watch?v={target}"
+
+    options = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+    }
+
+    with yt_dlp.YoutubeDL(options) as ydl:
+        info = ydl.extract_info(target, download=False)
+
+    title = str((info or {}).get("title") or "").strip()
+    if not title:
+        raise RuntimeError("yt-dlp did not return a YouTube title.")
+
+    return title
 
 
 def prompt_tags(supplied: str | None = None) -> list[str]:
@@ -288,6 +312,17 @@ def prompt_timeframe(supplied: str | None = None) -> str:
 
     print("Unknown timeframe choice; using present.")
     return "present"
+
+
+def prompt_stream() -> str:
+    """Prompt for the CMS stream YAML field."""
+
+    while True:
+        stream = input("Stream: ").strip()
+        if stream:
+            return stream
+
+        print("Stream cannot be empty.")
 
 
 def transcript_body(paragraphs: Sequence[str]) -> str:
@@ -332,6 +367,130 @@ def remove_createentry_placeholder(story_path: Path) -> None:
     )
 
 
+def get_screenshot_dir(config_path: str | None = None) -> Path:
+    """
+    Return the configured screenshot directory, falling back to
+    ~/Pictures/Screenshots.
+
+    Recognised config keys (in any section):
+        screenshot_dir
+        screenshots_dir
+        screenshot_directory
+        screenshots_directory
+    """
+
+    default_dir = Path("~/Pictures/Screenshots").expanduser()
+
+    candidates: list[Path] = []
+    if config_path:
+        candidates.append(Path(config_path).expanduser())
+    else:
+        candidates.append(REPO_ROOT / "config.ini")
+
+    config_file = next((path for path in candidates if path.is_file()), None)
+    if config_file is None:
+        return default_dir
+
+    parser = configparser.ConfigParser()
+    try:
+        parser.read(config_file, encoding="utf-8")
+    except Exception:
+        return default_dir
+
+    keys = (
+        "screenshot_dir",
+        "screenshots_dir",
+        "screenshot_directory",
+        "screenshots_directory",
+    )
+
+    for key in keys:
+        value = parser.defaults().get(key)
+        if value and value.strip():
+            return Path(value.strip()).expanduser()
+
+    for section in parser.sections():
+        for key in keys:
+            value = parser[section].get(key)
+            if value and value.strip():
+                return Path(value.strip()).expanduser()
+
+    return default_dir
+
+
+def newest_file(directory: Path) -> Path:
+    """Return the most recently modified regular file in directory."""
+
+    if not directory.is_dir():
+        raise FileNotFoundError(f"Screenshot directory not found: {directory}")
+
+    files = [path for path in directory.iterdir() if path.is_file()]
+    if not files:
+        raise FileNotFoundError(f"No screenshot files found in: {directory}")
+
+    return max(files, key=lambda path: path.stat().st_mtime)
+
+
+def resolve_image_source(args: argparse.Namespace) -> tuple[Path | None, bool]:
+    """
+    Resolve an optional image source.
+
+    Returns:
+        (source_path, move_source)
+
+    --image copies the explicitly supplied absolute path.
+    --last-screenshot moves the newest file from the screenshot directory.
+    """
+
+    if args.image:
+        source = Path(args.image).expanduser()
+        if not source.is_absolute():
+            raise ValueError("--image requires the full (absolute) path to the image file.")
+        if not source.is_file():
+            raise FileNotFoundError(f"Image file not found: {source}")
+        return source, False
+
+    if args.last_screenshot:
+        screenshot_dir = get_screenshot_dir(args.config)
+        source = newest_file(screenshot_dir)
+        return source, True
+
+    return None, False
+
+
+def unique_destination(directory: Path, filename: str) -> Path:
+    """Choose a destination without overwriting an existing asset."""
+
+    destination = directory / filename
+    if not destination.exists():
+        return destination
+
+    source_name = Path(filename)
+    stem = source_name.stem
+    suffix = source_name.suffix
+    counter = 2
+
+    while True:
+        candidate = directory / f"{stem}-{counter}{suffix}"
+        if not candidate.exists():
+            return candidate
+        counter += 1
+
+
+def add_entry_image(entry_dir: Path, source: Path, move_source: bool) -> Path:
+    """Copy or move an image into the entry root for use as the thumbnail."""
+
+    entry_dir = Path(entry_dir)
+    destination = unique_destination(entry_dir, source.name)
+
+    if move_source:
+        shutil.move(str(source), str(destination))
+    else:
+        shutil.copy2(source, destination)
+
+    return destination
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Download a YouTube transcript and create a CMS entry."
@@ -372,6 +531,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="Approximate maximum paragraph length before splitting (default: 700).",
     )
 
+    image_group = parser.add_mutually_exclusive_group()
+    image_group.add_argument(
+        "--image",
+        help=(
+            "Full path to an image to copy into the new entry directory as its thumbnail. "
+            "The original file is left in place."
+        ),
+    )
+    image_group.add_argument(
+        "--last-screenshot",
+        action="store_true",
+        help=(
+            "Move the most recently modified file from the configured screenshot "
+            "directory into the new entry directory as its thumbnail."
+        ),
+    )
+
     return parser
 
 
@@ -379,6 +555,17 @@ def main() -> int:
     args = build_parser().parse_args()
 
     try:
+        image_source, move_image = resolve_image_source(args)
+        if image_source is not None:
+            action = "move" if move_image else "copy"
+            print(f"[INFO] Image ({action}): {image_source}")
+
+        if sys.version_info < (3, 10):
+            raise RuntimeError(
+                "ytv2cms.py requires Python 3.10 or later. "
+                "Python 3.9 and earlier are no longer supported."
+            )
+
         video_id = extract_video_id(args.input)
         print(f"[INFO] Video ID: {video_id}")
 
@@ -406,14 +593,16 @@ def main() -> int:
         )
         print()
 
-        title = prompt_title(video_id, args.title)
+        title = fetch_video_title(args.input, args.title)
         tags = prompt_tags(args.tags)
         timeframe = prompt_timeframe(args.timeframe)
+        stream = prompt_stream()
 
         print()
         print(f"[INFO] Title: {title}")
         print(f"[INFO] Tags: {tags if tags else '(none)'}")
         print(f"[INFO] Timeframe: {timeframe}")
+        print(f"[INFO] Stream: {stream}")
         print("[INFO] Creating CMS entry...")
 
         yaml_fields = {
@@ -421,6 +610,7 @@ def main() -> int:
             "source_video_id": video_id,
             "source_url": args.input,
             "timeframe": [timeframe],
+            "stream": stream,
         }
 
         entry_id, entry_dir, story_path = create_entry(
@@ -434,10 +624,16 @@ def main() -> int:
 
         remove_createentry_placeholder(story_path)
 
+        image_path = None
+        if image_source is not None:
+            image_path = add_entry_image(Path(entry_dir), image_source, move_image)
+
         print()
         print(f"[OK] Created: {entry_id}")
         print(f"[OK] Entry:   {entry_dir}")
         print(f"[OK] Story:   {story_path}")
+        if image_path is not None:
+            print(f"[OK] Image:   {image_path}")
         print()
         print("Next:")
         print(f"  cd {entry_dir}")
