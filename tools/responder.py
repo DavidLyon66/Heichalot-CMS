@@ -187,6 +187,29 @@ def call_ollama(prompt: str, ollama_cfg: OllamaConfig) -> str:
     return data.get("response", "").strip()
 
 
+def respond(
+    prompt: str,
+    *,
+    api: str = "ollama",
+    model: str = "gemma3",
+    config_path: pathlib.Path = DEFAULT_CONFIG_PATH,
+    ollama_section: str = OLLAMA_SECTION,
+) -> str:
+    """Return one synchronous response for one prompt.
+
+    This is the small internal interface used by CharacterIF. Transport and
+    character routing stay outside responder.py; this function only maps a
+    configured interface/model to the existing prompt/response implementation.
+    """
+    interface = (api or "ollama").strip().lower()
+    if interface != "ollama":
+        raise ValueError(f"unsupported responder api: {api}")
+
+    cfg = load_ollama_config(config_path, ollama_section)
+    cfg.model = (model or cfg.model).strip()
+    return call_ollama(prompt.strip(), cfg)
+
+
 class Responder:
     def __init__(
         self,

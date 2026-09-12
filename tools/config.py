@@ -64,6 +64,14 @@ def _find_location_file() -> Path:
         CONFIG_DIR.parent / "src" / "data" / "locations-en.yaml",
     ]
 
+    # PyInstaller: assets are extracted under sys._MEIPASS.
+    if getattr(sys, "frozen", False):
+        meipass = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+        candidates = [
+            meipass / "data" / "locations-en.yaml",
+            meipass / "src" / "data" / "locations-en.yaml",
+        ] + candidates
+
     for candidate in candidates:
         if candidate.is_file():
             return candidate.resolve()
@@ -117,6 +125,14 @@ def platform_data_dir() -> Path:
         return Path(xdg) / APP_SLUG
 
     return Path.home() / ".local" / "share" / APP_SLUG
+
+
+def character_data_dir(name: str) -> Path:
+    """Return the platform data directory reserved for one CharacterIF character."""
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", name.strip()).strip("-._").lower()
+    if not slug:
+        raise ValueError("character name does not contain a usable directory name")
+    return platform_data_dir() / f"character-{slug}"
 
 def default_config_path() -> Path:
     override = os.environ.get("HEICHALOT_CONFIG", "").strip()
