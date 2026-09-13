@@ -24,6 +24,7 @@ import tempfile
 import zipfile
 import base64
 import sqlite3
+import time
 from datetime import datetime, timezone
 from dataclasses import dataclass
 from pathlib import Path
@@ -327,15 +328,49 @@ def fetch_json(url: str, opener) -> Dict[str, Any]:
     except json.JSONDecodeError as exc:
         raise UpdateCMSError(f"Invalid JSON received from {url}: {exc}") from exc
 
-def download_file(url: str, dest_path: Path, opener) -> None:
-    request = Request(url, headers={"User-Agent": "Heichalot-CMS-Updater/0.2"})
-    try:
-        with opener.open(request, timeout=60) as response, dest_path.open("wb") as out_file:
-            shutil.copyfileobj(response, out_file)
-    except HTTPError as exc:
-        raise UpdateCMSError(f"HTTP error downloading {url}: {exc.code} {exc.reason}") from exc
-    except URLError as exc:
-        raise UpdateCMSError(f"Network error downloading {url}: {exc.reason}") from exc
+def download_file(url: str, dest_path: Path, opener, retries: int = 3) -> None:
+    """Download atomically, retrying transient failures.
+
+    Data is first written to <dest>.part and renamed only after a complete
+    response, so an interrupted download is never mistaken for a valid ZIP.
+    """
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    part_path = dest_path.with_name(dest_path.name + ".part")
+    last_exc = None
+
+    for attempt in range(1, retries + 1):
+        request = Request(url, headers={"User-Agent": "Heichalot-CMS-Updater/0.2"})
+        try:
+            with opener.open(request, timeout=60) as response, part_path.open("wb") as out_file:
+                shutil.copyfileobj(response, out_file)
+            part_path.replace(dest_path)
+            return
+        except HTTPError as exc:
+            last_exc = exc
+            # Most 4xx errors are permanent; retrying them only hides the real problem.
+            if 400 <= exc.code < 500 and exc.code != 408:
+                break
+        except (URLError, OSError) as exc:
+            last_exc = exc
+
+        if part_path.exists():
+            part_path.unlink()
+        if attempt < retries:
+            print(f"Download failed (attempt {attempt}/{retries}); retrying...")
+            time.sleep(attempt * 2)
+
+    if part_path.exists():
+        part_path.unlink()
+
+    if isinstance(last_exc, HTTPError):
+        raise UpdateCMSError(
+            f"HTTP error downloading {url}: {last_exc.code} {last_exc.reason}"
+        ) from last_exc
+    if isinstance(last_exc, URLError):
+        raise UpdateCMSError(
+            f"Network error downloading {url}: {last_exc.reason}"
+        ) from last_exc
+    raise UpdateCMSError(f"Error downloading {url}: {last_exc}") from last_exc
 
 
 def read_local_version(cfg) -> Optional[str]:
@@ -596,30 +631,36 @@ def run_update(
         print("Dry run only. No files downloaded or installed.")
         return 0
 
-    if flush:
-        if not is_flush_allowed(cfg):
-            raise UpdateCMSError(
-                "Flush is disabled. Set [updatecms] flush_allowed=true "
-                "in config.ini to permit deletion of downloaded CMS entries."
-            )
+    if flush and not is_flush_allowed(cfg):
+        raise UpdateCMSError(
+            "Flush is disabled. Set [updatecms] flush_allowed=true "
+            "in config.ini to permit deletion of downloaded CMS entries."
+        )
 
+    entries_db_path = paths.data_dir / "content.db"
+    cache_dir = paths.data_dir / "updatecms-cache"
+
+    # CRITICAL: download and validate every required archive before changing
+    # the installed CMS. A failed download must never leave --flush half-done.
+    prepared = prepare_selected_archives(
+        selected_files,
+        base_url,
+        opener,
+        cache_dir,
+        entry_start_id=DOWNLOADED_ENTRY_START_ID,
+    )
+
+    if flush:
         deleted = delete_downloaded_entries(
             paths.cms_dir,
             entry_start_id=DOWNLOADED_ENTRY_START_ID,
         )
-
         print()
         print(f"Flush deleted {len(deleted)} downloaded CMS entr{'y' if len(deleted) == 1 else 'ies'}.")
 
-
-    entries_db_path = paths.data_dir / "content.db"
-
-    install_selected_archives(
-        selected_files,
-        base_url,
-        opener,
+    install_prepared_archives(
+        prepared,
         paths.cms_dir,
-        entry_start_id=DOWNLOADED_ENTRY_START_ID,
         entries_db_path=entries_db_path,
     )
 
@@ -645,6 +686,89 @@ def latest_manifest_date(manifest: dict) -> str:
 
     return max(dates) if dates else ""
 
+def prepare_selected_archives(
+    selected_files: list[str],
+    base_url: str,
+    opener,
+    cache_dir: Path,
+    entry_start_id: int = DOWNLOADED_ENTRY_START_ID,
+) -> list[tuple[str, Path, list[Path], tempfile.TemporaryDirectory]]:
+    """Download/cache and validate all archives before touching the CMS.
+
+    Each archive is kept in a persistent cache. Extraction directories are
+    temporary but kept alive until installation completes.
+    """
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    prepared = []
+
+    try:
+        for filename in selected_files:
+            safe_name = Path(filename).name
+            if not safe_name or safe_name in {".", ".."}:
+                raise UpdateCMSError(f"Invalid archive filename in manifest: {filename!r}")
+
+            zip_url = resolve_zip_url(base_url, filename)
+            zip_path = cache_dir / safe_name
+
+            if zip_path.exists():
+                print()
+                print(f"Using cached release: {zip_path}")
+            else:
+                print()
+                print(f"Downloading release from: {zip_url}")
+                download_file(zip_url, zip_path, opener)
+
+            # A corrupt cached file is removed so the next run can recover.
+            try:
+                with zipfile.ZipFile(zip_path, "r") as zf:
+                    bad_member = zf.testzip()
+                    if bad_member is not None:
+                        raise zipfile.BadZipFile(f"CRC failure in {bad_member}")
+            except zipfile.BadZipFile as exc:
+                zip_path.unlink(missing_ok=True)
+                raise UpdateCMSError(
+                    f"Archive is not a valid ZIP and was removed from cache: {zip_path}"
+                ) from exc
+
+            tmp = tempfile.TemporaryDirectory(prefix=f"updatecms_{safe_name}_")
+            extract_dir = Path(tmp.name)
+            print(f"Extracting and validating: {safe_name}")
+            try:
+                with zipfile.ZipFile(zip_path, "r") as zf:
+                    zf.extractall(extract_dir)
+                entry_dirs = validate_zip_entries(extract_dir, entry_start_id)
+            except Exception:
+                tmp.cleanup()
+                raise
+
+            prepared.append((safe_name, zip_path, entry_dirs, tmp))
+
+        return prepared
+    except Exception:
+        for _name, _zip, _entries, tmp in prepared:
+            tmp.cleanup()
+        raise
+
+
+def install_prepared_archives(
+    prepared: list[tuple[str, Path, list[Path], tempfile.TemporaryDirectory]],
+    cms_dir: Path,
+    entries_db_path: Path | None = None,
+) -> None:
+    try:
+        for filename, zip_path, entry_dirs, _tmp in prepared:
+            print()
+            print(f"Installing {filename} into: {cms_dir}")
+            install_release(entry_dirs, cms_dir)
+
+            if entries_db_path is not None:
+                print(f"Updating local content database: {entries_db_path}")
+                install_archive_to_entries_db(zip_path, entries_db_path)
+    finally:
+        for _name, _zip, _entries, tmp in prepared:
+            tmp.cleanup()
+
+
 def install_selected_archives(
     selected_files: list[str],
     base_url: str,
@@ -653,35 +777,12 @@ def install_selected_archives(
     entry_start_id: int = DOWNLOADED_ENTRY_START_ID,
     entries_db_path: Path | None = None,
 ) -> None:
-    with tempfile.TemporaryDirectory(prefix="updatecms_") as tmpdir_str:
-        tmpdir = Path(tmpdir_str)
-
-        for filename in selected_files:
-            zip_url = resolve_zip_url(base_url, filename)
-            zip_path = tmpdir / filename
-            extract_dir = tmpdir / f"extracted-{filename}"
-            extract_dir.mkdir(parents=True, exist_ok=True)
-
-            print()
-            print(f"Downloading release from: {zip_url}")
-            download_file(zip_url, zip_path, opener)
-
-            print("Extracting zip...")
-            try:
-                with zipfile.ZipFile(zip_path, "r") as zf:
-                    zf.extractall(extract_dir)
-            except zipfile.BadZipFile as exc:
-                raise UpdateCMSError(f"Downloaded file is not a valid zip: {zip_path}") from exc
-
-            print("Validating package...")
-            entry_dirs = validate_zip_entries(extract_dir, entry_start_id)
-
-            print(f"Installing into: {cms_dir}")
-            install_release(entry_dirs, cms_dir)
-
-            if entries_db_path is not None:
-                print(f"Updating local content database: {entries_db_path}")
-                install_archive_to_entries_db(zip_path, entries_db_path)
+    """Compatibility wrapper using the safe staged-install behaviour."""
+    cache_dir = (entries_db_path.parent if entries_db_path else cms_dir) / "updatecms-cache"
+    prepared = prepare_selected_archives(
+        selected_files, base_url, opener, cache_dir, entry_start_id
+    )
+    install_prepared_archives(prepared, cms_dir, entries_db_path)
 
 def main() -> int:
     parser = build_arg_parser()
