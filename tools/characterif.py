@@ -49,7 +49,9 @@ import subprocess
 import sys
 import threading
 import time
+import pyaml
 from datetime import datetime, timezone
+from multiprocessing import shared_memory
 from pathlib import Path
 from typing import Any, Dict, Optional, List
 from urllib import error, request
@@ -80,11 +82,8 @@ SRC_DIR = BASE_DIR / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-try:
-    from config import character_data_dir, platform_data_dir
-except ImportError:
-    character_data_dir = None
-    platform_data_dir = None
+from config import character_data_dir, platform_data_dir
+
 STATE_DIR = Path.home() / ".config" / APP_NAME
 REGISTRY_CACHE = STATE_DIR / "nodes.json"
 LOCATION_MANIFEST = BASE_DIR / "location-manifest.json"
@@ -97,6 +96,15 @@ RECENT_CHAT_LOCK = threading.Lock()
 
 CHILDREN = []
 CURRENT_TAILCAT_ADDRESS: Optional[str] = None
+
+
+# Volatile character connection status shared between local processes.
+# CharacterIF is the intended writer; UIs and CMS processes are readers.
+PRESENCE_SHM_NAME = "heichalot_characterif_presence_v1"
+PRESENCE_SHM_SIZE = 64 * 1024
+PRESENCE_HEADER_SIZE = 16
+PRESENCE_WRITE_LOCK = threading.Lock()
+PRESENCE_SHM_OWNER: Optional[shared_memory.SharedMemory] = None
 
 
 def utcnow() -> str:
@@ -249,13 +257,220 @@ def all_character_documents(cfg: configparser.ConfigParser) -> List[Dict[str, An
     return local + cached_remote_character_documents()
 
 
+def character_key(name: str, node: str) -> str:
+    """Return the canonical distributed character identity."""
+    return f"{name}@{node}"
+
+
+def load_characters() -> Dict[str, Dict[str, Any]]:
+    """Return all characters known to this installation, keyed by name@node."""
+    cfg = load_config()
+    result: Dict[str, Dict[str, Any]] = {}
+
+    for character in all_character_documents(cfg):
+        name = str(character.get("name") or "").strip()
+        node = str(character.get("source_node") or character.get("node") or "").strip()
+        if not name or not node:
+            continue
+
+        key = character_key(name, node)
+        result[key] = {
+            "name": name,
+            "character_type": character.get("character_type"),
+            "node": node,
+            "local": bool(character.get("local")),
+            "portrait": character.get("portrait"),
+            "data_dir": character.get("data_dir"),
+            "available_remotely": bool(character.get("available_remotely")),
+            "exists_remotely": bool(character.get("exists_remotely")),
+        }
+
+    return result
+
+
+def _presence_open_for_write() -> shared_memory.SharedMemory:
+    """Create or attach to the local shared-memory presence block."""
+    global PRESENCE_SHM_OWNER
+
+    if PRESENCE_SHM_OWNER is not None:
+        return PRESENCE_SHM_OWNER
+
+    try:
+        shm = shared_memory.SharedMemory(
+            name=PRESENCE_SHM_NAME,
+            create=True,
+            size=PRESENCE_SHM_SIZE,
+        )
+        shm.buf[:] = b"\0" * PRESENCE_SHM_SIZE
+    except FileExistsError:
+        shm = shared_memory.SharedMemory(name=PRESENCE_SHM_NAME, create=False)
+
+    PRESENCE_SHM_OWNER = shm
+    return shm
+
+
+def _presence_read_from(shm: shared_memory.SharedMemory) -> Dict[str, Dict[str, Any]]:
+    """Read one consistent JSON snapshot from the shared-memory block."""
+    for _ in range(5):
+        sequence_before = int.from_bytes(shm.buf[0:8], "little")
+        if sequence_before & 1:
+            time.sleep(0)
+            continue
+
+        payload_length = int.from_bytes(shm.buf[8:16], "little")
+        if payload_length == 0:
+            return {}
+        if payload_length > len(shm.buf) - PRESENCE_HEADER_SIZE:
+            return {}
+
+        payload = bytes(
+            shm.buf[
+                PRESENCE_HEADER_SIZE:
+                PRESENCE_HEADER_SIZE + payload_length
+            ]
+        )
+
+        sequence_after = int.from_bytes(shm.buf[0:8], "little")
+        if sequence_before != sequence_after or (sequence_after & 1):
+            time.sleep(0)
+            continue
+
+        try:
+            value = json.loads(payload.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return {}
+
+        return value if isinstance(value, dict) else {}
+
+    return {}
+
+
+def character_statuses() -> Dict[str, Dict[str, Any]]:
+    """
+    Return the complete last-known character connection-status snapshot.
+
+    This is the cheap reader intended for UIs. If CharacterIF has not created
+    the shared-memory block yet, an empty dictionary is returned.
+    """
+    if PRESENCE_SHM_OWNER is not None:
+        return _presence_read_from(PRESENCE_SHM_OWNER)
+
+    try:
+        shm = shared_memory.SharedMemory(name=PRESENCE_SHM_NAME, create=False)
+    except FileNotFoundError:
+        return {}
+
+    try:
+        return _presence_read_from(shm)
+    finally:
+        shm.close()
+
+
+def _write_character_statuses(statuses: Dict[str, Dict[str, Any]]) -> None:
+    """Replace the complete shared-memory status snapshot."""
+    payload = json.dumps(
+        statuses,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+
+    if len(payload) > PRESENCE_SHM_SIZE - PRESENCE_HEADER_SIZE:
+        raise RuntimeError("character status shared-memory block is full")
+
+    with PRESENCE_WRITE_LOCK:
+        shm = _presence_open_for_write()
+        sequence = int.from_bytes(shm.buf[0:8], "little")
+        if sequence & 1:
+            sequence += 1
+
+        # Odd sequence = write in progress. Even sequence = stable snapshot.
+        shm.buf[0:8] = (sequence + 1).to_bytes(8, "little")
+        shm.buf[PRESENCE_HEADER_SIZE:PRESENCE_HEADER_SIZE + len(payload)] = payload
+        shm.buf[8:16] = len(payload).to_bytes(8, "little")
+        shm.buf[0:8] = (sequence + 2).to_bytes(8, "little")
+
+
+def set_character_status(name: str, node: str, status: str) -> Dict[str, Any]:
+    """Set one character's last-known connection status."""
+    status = status.strip().lower()
+    if status not in {"online", "offline"}:
+        raise ValueError("status must be 'online' or 'offline'")
+
+    name = name.strip()
+    node = node.strip()
+    if not name or not node:
+        raise ValueError("character name and node are required")
+
+    key = character_key(name, node)
+
+    with PRESENCE_WRITE_LOCK:
+        # Read while holding the writer lock, then write the replacement
+        # snapshot without re-entering the same lock.
+        if PRESENCE_SHM_OWNER is not None:
+            statuses = _presence_read_from(PRESENCE_SHM_OWNER)
+        else:
+            try:
+                existing = shared_memory.SharedMemory(
+                    name=PRESENCE_SHM_NAME,
+                    create=False,
+                )
+            except FileNotFoundError:
+                statuses = {}
+            else:
+                try:
+                    statuses = _presence_read_from(existing)
+                finally:
+                    existing.close()
+
+        statuses[key] = {
+            "name": name,
+            "node": node,
+            "status": status,
+        }
+
+        payload = json.dumps(
+            statuses,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        if len(payload) > PRESENCE_SHM_SIZE - PRESENCE_HEADER_SIZE:
+            raise RuntimeError("character status shared-memory block is full")
+
+        shm = _presence_open_for_write()
+        sequence = int.from_bytes(shm.buf[0:8], "little")
+        if sequence & 1:
+            sequence += 1
+        shm.buf[0:8] = (sequence + 1).to_bytes(8, "little")
+        shm.buf[PRESENCE_HEADER_SIZE:PRESENCE_HEADER_SIZE + len(payload)] = payload
+        shm.buf[8:16] = len(payload).to_bytes(8, "little")
+        shm.buf[0:8] = (sequence + 2).to_bytes(8, "little")
+
+    return dict(statuses[key])
+
+
+def get_character_status(name: str, node: str) -> Optional[Dict[str, Any]]:
+    """Return one character's last-known status, or None if it has no entry."""
+    return character_statuses().get(character_key(name.strip(), node.strip()))
+
+
+def online_characters() -> Dict[str, Dict[str, Any]]:
+    """Return only characters whose last-known status is online."""
+    return {
+        key: value
+        for key, value in character_statuses().items()
+        if value.get("status") == "online"
+    }
+
+
+
 def remotely_available_character_documents(cfg: configparser.ConfigParser) -> List[Dict[str, Any]]:
     """Return only local characters that this node explicitly advertises remotely."""
     result = []
     for doc in character_documents(cfg):
         if doc.get("available_remotely"):
             item = dict(doc)
-            item["local"] = True
+            item["local"] = False
+            item["exists_remotely"] = True
             result.append(item)
     return result
 
@@ -984,22 +1199,25 @@ def make_app() -> "Flask":
             return jsonify({"ok": False, "error": "text is required"}), 400
 
         sender_node = body.get("from_node") or "unknown-node"
-        sender_ai = body.get("from_ai") or sender_node
-        target_ai = body.get("to_ai") or local_ai_name(cfg)
+        sender_character = body.get("from_character") or body.get("from_ai") or "user"
+        target_character = body.get("to_character") or body.get("to_ai") or sender_character
+        target_node = body.get("to_node") or local_node_name(cfg)
 
         # Keep a small display-oriented feed as well as printing to console.
         # This is not intended to replace durable chat storage/queueing.
         remembered = dict(body)
         remembered.setdefault("from_node", sender_node)
-        remembered.setdefault("from_ai", sender_ai)
-        remembered.setdefault("to_ai", target_ai)
+        remembered.setdefault("from_character", sender_character)
+        remembered.setdefault("to_node", target_node)
+        remembered.setdefault("to_character", target_character)
         remember_chat_message(remembered)
 
         print("\nCHAT")
-        print(f"  from node: {sender_node}")
-        print(f"  from ai:   {sender_ai}")
-        print(f"  to ai:     {target_ai}")
-        print(f"  text:      {text_value}")
+        print(f"  from node:      {sender_node}")
+        print(f"  from character: {sender_character}")
+        print(f"  to node:        {target_node}")
+        print(f"  to character:   {target_character}")
+        print(f"  text:           {text_value}")
 
         return jsonify({
             "ok": True,
@@ -1426,6 +1644,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="create or update a character; prompts for missing values",
     )
+    p.add_argument(
+        "--character-list-json",
+        action="store_true",
+        help="print all known characters as JSON and exit",
+    )
+    p.add_argument(
+        "--character-status-json",
+        action="store_true",
+        help="print the shared-memory character connection statuses as JSON and exit",
+    )
     p.add_argument("--name", help="character name")
     p.add_argument("--portrait", help="portrait image filename")
     p.add_argument("--api", dest="interface_api", help="local responder API (default: ollama)")
@@ -1477,11 +1705,19 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("remote_command", nargs=argparse.REMAINDER)
     s.add_argument("--timeout", type=int, default=60)
 
-    s = sub.add_parser("chat", help="send simple text to a known peer")
+    s = sub.add_parser("chat", help="send simple text from one character to another")
     s.add_argument("node")
     s.add_argument("--chat-text", required=True)
-    s.add_argument("--ai-name", help="sender AI name; defaults to config/local node name")
-    s.add_argument("--to-ai", help="optional target AI name on remote node")
+    s.add_argument(
+        "--from-character", "--ai-name",
+        dest="from_character",
+        help="sending character name; defaults to 'user'",
+    )
+    s.add_argument(
+        "--to-character", "--to-ai",
+        dest="to_character",
+        help="target character name; defaults to the sending character",
+    )
 
     s = sub.add_parser("respond", help="request one synchronous response from a character")
     s.add_argument("character")
@@ -1506,6 +1742,14 @@ def main() -> int:
 
     if args.setup_character:
         return setup_character(args)
+
+    if args.character_list_json:
+        print(json.dumps(load_characters(), indent=2, sort_keys=True))
+        return 0
+
+    if args.character_status_json:
+        print(json.dumps(character_statuses(), indent=2, sort_keys=True))
+        return 0
 
     if not args.command:
         parser.print_help()
@@ -1568,12 +1812,16 @@ def main() -> int:
                 print(f"node {args.node!r} not found in {REGISTRY_CACHE}", file=sys.stderr)
                 return 1
 
+            sender_character = args.from_character or "user"
+            target_character = args.to_character or sender_character
+
             envelope = {
                 "protocol": PROTOCOL,
                 "type": "chat-text",
                 "from_node": local_node_name(cfg),
-                "from_ai": args.ai_name or local_ai_name(cfg),
-                "to_ai": args.to_ai or None,
+                "from_character": sender_character,
+                "to_node": args.node,
+                "to_character": target_character,
                 "text": args.chat_text,
                 "time": utcnow(),
             }
