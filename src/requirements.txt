@@ -7,3 +7,4 @@ PyQtWebEngine>=5.15; sys_platform != 'win32'
 psutil
 paho-mqtt
 notify-py
+requests
