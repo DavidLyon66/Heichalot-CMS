@@ -6,5 +6,14 @@ PyQt5>=5.15; sys_platform != 'win32'
 PyQtWebEngine>=5.15; sys_platform != 'win32'
 psutil
 paho-mqtt
+requests>=2.31.0
+Jinja2>=3.1.0
+python-dateutil>=2.9.0
+reportlab
+send2trash
 notify-py
 requests
+
+# Heavy numerical deps only required by the rvcrypto analysis tools.
+numpy
+pandas
