@@ -40,6 +40,7 @@ from __future__ import annotations
 import argparse
 import atexit
 import configparser
+import getpass
 import json
 import os
 import re
@@ -96,6 +97,14 @@ LOCATION_MANIFEST = BASE_DIR / "location-manifest.json"
 RECENT_CHAT_LIMIT = 100
 RECENT_CHAT: List[Dict[str, Any]] = []
 RECENT_CHAT_LOCK = threading.Lock()
+
+# Ambiguous default portrait used when a character is configured without an image.
+DEFAULT_PORTRAIT_SVG = """\
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96">
+  <circle cx="48" cy="34" r="16" fill="#94a3b8"/>
+  <path d="M16 90c4-24 16-34 32-34s28 10 32 34" fill="#94a3b8"/>
+</svg>
+"""
 
 CHILDREN = []
 CURRENT_TAILCAT_ADDRESS: Optional[str] = None
@@ -685,9 +694,17 @@ def local_node_name(cfg: configparser.ConfigParser) -> str:
     return socket.gethostname().split(".")[0]
 
 
+def local_user_account_name(cfg: configparser.ConfigParser) -> str:
+    """Resolve the human user account name with optional alias."""
+    alias = cfg_get(cfg, "characterif", "local_user_account_name")
+    if alias:
+        return alias.strip()
+    return getpass.getuser()
+
+
 def local_ai_name(cfg: configparser.ConfigParser) -> str:
     """Human/AI identity used in simple chat envelopes."""
-    name = cfg_get(cfg, "characterif", "ai_name")
+    name = cfg_get(cfg, "characterif", "local_user_account_name")
     if name:
         return name.strip()
     return local_node_name(cfg)
@@ -701,8 +718,6 @@ def character_section(cfg: configparser.ConfigParser, name: Optional[str] = None
 def character_cfg_get(cfg: configparser.ConfigParser, option: str, fallback=None, name: Optional[str] = None):
     """Read a character-specific setting from [character-<ai_name>]."""
     return cfg_get(cfg, character_section(cfg, name), option, fallback)
-
-
 
 
 def _character_bool(cfg: configparser.ConfigParser, name: str, option: str, fallback: bool = False) -> bool:
@@ -719,7 +734,11 @@ def character_document(cfg: configparser.ConfigParser, name: str) -> Optional[Di
         return None
 
     configured_name = character_cfg_get(cfg, "name", name, name=name).strip()
-    character_type = character_cfg_get(cfg, "character_type", "ai", name=name).strip().lower()
+    character_type = character_cfg_get(cfg, "type", name=name)
+    if character_type is None:
+        character_type = ""
+    character_type = character_type.strip().lower()
+    character_type = "ai" if character_type == "ai" else "human"
     data_dir = character_cfg_get(cfg, "data_dir", "", name=name).strip()
 
     return {
@@ -1136,6 +1155,8 @@ def respond_as_character(cfg: configparser.ConfigParser, name: str, text: str) -
     """Route one synchronous prompt to a local or cached remote character."""
     local_doc = character_document(cfg, name)
     if local_doc is not None:
+        if local_doc.get("character_type") != "ai":
+            raise RuntimeError(f"character not available: {name}")
         private = load_character_private_config(cfg, name)
         api = private.get("interface", "api", fallback="ollama")
         model = private.get("interface", "model", fallback="gemma3")
@@ -1230,8 +1251,30 @@ def remember_chat_message(message: Dict[str, Any]) -> None:
             del RECENT_CHAT[:-RECENT_CHAT_LIMIT]
 
 
+def notify_chat_message(cfg: configparser.ConfigParser, sender: str, text: str) -> None:
+    """Deliver an incoming chat to the desktop user via notify-send when possible."""
+    if shutil.which("notify-send") is None:
+        return
+
+    args = [
+        "notify-send",
+        f"--app-name={APP_NAME}",
+    ]
+
+    icon = portrait_path(cfg, sender)
+    if icon is not None and icon.is_file():
+        args.append(f"--icon={icon}")
+
+    args += ["Message from " + sender, text]
+
+    try:
+        subprocess.Popen(args, stderr=subprocess.DEVNULL)
+    except OSError:
+        pass
+
+
 def api_port(cfg: configparser.ConfigParser) -> int:
-    return int(character_cfg_get(cfg, "api_port", DEFAULT_PORT))
+    return int(cfg_get(cfg, "characterif", "api_port", DEFAULT_PORT))
 
 
 def lan_ip_address() -> str:
@@ -1380,7 +1423,7 @@ def identity_document(cfg: configparser.ConfigParser, address: str) -> Dict[str,
     return {
         "protocol": PROTOCOL,
         "node": local_node_name(cfg),
-        "ai_name": local_ai_name(cfg),
+        "character": local_user_account_name(cfg),
         "address": address,
         "api_port": api_port(cfg),
         "services": {
@@ -1617,7 +1660,7 @@ def make_app() -> "Flask":
             "protocol": PROTOCOL,
             "api_version": API_VERSION,
             "node": local_node_name(cfg),
-            "ai_name": local_ai_name(cfg),
+            "character": local_user_account_name(cfg),
             "tailcat_address": CURRENT_TAILCAT_ADDRESS,
             "time": utcnow(),
         })
@@ -1872,11 +1915,17 @@ def make_app() -> "Flask":
         print(f"  to character:   {target_character}")
         print(f"  text:           {text_value}")
 
+        if (
+            target_node == local_node_name(cfg)
+            and target_character.casefold() == local_user_account_name(cfg).casefold()
+        ):
+            notify_chat_message(cfg, sender_character, text_value)
+
         return jsonify({
             "ok": True,
             "received": True,
             "node": local_node_name(cfg),
-            "ai": local_ai_name(cfg),
+            "character": local_user_account_name(cfg),
             "time": utcnow(),
         })
 
@@ -2119,9 +2168,17 @@ def setup_character(args) -> int:
     if not name:
         raise RuntimeError("character name is required")
 
-    portrait_value = args.portrait or _setup_prompt_value("Portrait image filename")
-    portrait_source = Path(portrait_value).expanduser()
-    if not portrait_source.is_file():
+    is_account_owner = name.casefold() == local_user_account_name(cfg).casefold()
+    if args.character_type is not None:
+        is_ai = args.character_type == "ai"
+    else:
+        is_ai = _setup_prompt_bool("Is this an AI character?", not is_account_owner)
+
+    portrait_text = args.portrait
+    if not portrait_text:
+        portrait_text = _setup_prompt_value("Portrait image filename (blank for default graphic)")
+    portrait_source = Path(portrait_text).expanduser() if portrait_text.strip() else None
+    if portrait_source is not None and not portrait_source.is_file():
         raise RuntimeError(f"portrait file not found: {portrait_source}")
 
     available_remotely = (
@@ -2143,16 +2200,20 @@ def setup_character(args) -> int:
     data_dir = character_data_dir(name)
     data_dir.mkdir(parents=True, exist_ok=True)
 
-    portrait_target = data_dir / portrait_source.name
-    if portrait_source.resolve() != portrait_target.resolve():
-        shutil.copy2(portrait_source, portrait_target)
+    portrait_target = data_dir / "portrait.svg"
+    if portrait_source is None:
+        portrait_target.write_text(DEFAULT_PORTRAIT_SVG)
+    else:
+        portrait_target = data_dir / portrait_source.name
+        if portrait_source.resolve() != portrait_target.resolve():
+            shutil.copy2(portrait_source, portrait_target)
 
     section = f"character-{name}"
     if not cfg.has_section(section):
         cfg.add_section(section)
 
     cfg.set(section, "name", name)
-    cfg.set(section, "character_type", "ai")
+    cfg.set(section, "type", "ai" if is_ai else "")
     cfg.set(section, "portrait", str(portrait_target.resolve()))
     cfg.set(section, "data_dir", str(data_dir.resolve()))
     cfg.set(section, "available_remotely", "true" if available_remotely else "false")
@@ -2180,7 +2241,7 @@ def setup_character(args) -> int:
     print("\nCharacter configured")
     print(f"  name:               {name}")
     print(f"  section:            [{section}]")
-    print("  character type:     ai")
+    print(f"  character type:     {'ai' if is_ai else 'human'}")
     print(f"  data:               {data_dir.resolve()}")
     print(f"  portrait:           {portrait_target.resolve()}")
     print(f"  available remotely: {'yes' if available_remotely else 'no'}")
@@ -2202,14 +2263,14 @@ def setup_lan() -> int:
     if not cfg.has_section("characterif"):
         cfg.add_section("characterif")
 
-    current_character = cfg_get(cfg, "characterif", "ai_name", local_ai_name(cfg))
+    current_user_account = cfg_get(cfg, "characterif", "local_user_account_name", local_user_account_name(cfg))
     current_node = cfg_get(cfg, "characterif", "node", local_node_name(cfg))
     current_port = str(api_port(cfg))
     current_lan = _setup_config_bool(cfg, "lan", True)
 
     print("\nCharacterIF LAN setup\n")
 
-    character_name = _setup_prompt_value("Character name", current_character)
+    user_account_name = _setup_prompt_value("User account name", current_user_account)
     node_name = _setup_prompt_value("Node name", current_node)
 
     while True:
@@ -2240,13 +2301,13 @@ def setup_lan() -> int:
         print("Configuration not changed.")
         return 0
 
-    cfg.set("characterif", "ai_name", character_name)
+    cfg.set("characterif", "local_user_account_name", user_account_name)
     cfg.set("characterif", "node", node_name)
-    section = f"character-{character_name}"
+    cfg.set("characterif", "api_port", str(port))
+    cfg.set("characterif", "lan", "true" if lan_enabled else "false")
+    section = f"character-{user_account_name}"
     if not cfg.has_section(section):
         cfg.add_section(section)
-    cfg.set(section, "api_port", str(port))
-    cfg.set("characterif", "lan", "true" if lan_enabled else "false")
 
     _write_setup_config(cfg)
 
@@ -2329,6 +2390,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="print the shared-memory character connection statuses as JSON and exit",
     )
     p.add_argument("--name", help="character name")
+    p.add_argument(
+        "--character-type", "--type",
+        dest="character_type",
+        choices=("ai", "human"),
+        help="whether this is an AI or a biological-human character",
+    )
     p.add_argument("--portrait", help="portrait image filename")
     p.add_argument("--api", dest="interface_api", help="local responder API (default: ollama)")
     p.add_argument("--model", help="local responder model (default: gemma3)")
