@@ -8,15 +8,128 @@ def _compat_md5(*args, **kwargs):
 hashlib.md5 = _compat_md5
 
 from reportlab.lib import colors
-from reportlab.lib.enums import TA_LEFT, TA_CENTER
+from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, ListFlowable, ListItem, HRFlowable, Image, PageBreak, Flowable, Table, TableStyle
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+
+try:
+    from bidi.algorithm import get_display as bidi_get_display
+except ImportError:
+    bidi_get_display = None
 
 INLINE_IMAGE_RE = re.compile(r'^!\[(.*?)\]\(([^/\\]+)\)(?:\{([^}]*)\})?$')
 IMAGE_ALIGN_MAP = {"left": "LEFT", "center": "CENTER", "right": "RIGHT"}
 DEFAULT_SPEAKER_COLORS = [colors.orange, colors.HexColor("#2563eb"), colors.red, colors.HexColor("#059669"), colors.HexColor("#7c3aed"), colors.HexColor("#c2410c")]
+
+HEBREW_RE = re.compile(r"[\u0590-\u05FF]")
+HEBREW_RUN_RE = re.compile(r'([\u0590-\u05FF\uFB1D-\uFB4F]+(?:[ \u05BE׳״]+[\u0590-\u05FF\uFB1D-\uFB4F]+)*)')
+HEBREW_FONT_NAME = "HeichalotHebrew"
+HEBREW_BOLD_FONT_NAME = "HeichalotHebrewBold"
+ENABLED_LANGUAGES = set()
+
+def parse_languages(value):
+    if not value:
+        return set()
+    aliases = {"he": "hebrew", "heb": "hebrew", "yi": "yiddish", "yid": "yiddish"}
+    result = set()
+    for item in value.split(","):
+        lang = item.strip().lower()
+        if lang:
+            result.add(aliases.get(lang, lang))
+    return result
+
+def _find_font_file(candidates):
+    for candidate in candidates:
+        p = Path(candidate).expanduser()
+        if p.exists():
+            return p
+    return None
+
+def configure_languages(languages):
+    global ENABLED_LANGUAGES
+    ENABLED_LANGUAGES = set(languages or ())
+    if not (ENABLED_LANGUAGES & {"hebrew", "yiddish"}):
+        return
+    regular = _find_font_file([
+        "/usr/share/fonts/truetype/noto/NotoSansHebrew-Regular.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSerifHebrew-Regular.ttf",
+        "/usr/share/fonts/opentype/noto/NotoSansHebrew-Regular.ttf",
+        "/usr/share/fonts/opentype/noto/NotoSerifHebrew-Regular.ttf",
+        "~/.local/share/fonts/NotoSansHebrew-Regular.ttf",
+        "~/.fonts/NotoSansHebrew-Regular.ttf",
+    ])
+    bold = _find_font_file([
+        "/usr/share/fonts/truetype/noto/NotoSansHebrew-Bold.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSerifHebrew-Bold.ttf",
+        "/usr/share/fonts/opentype/noto/NotoSansHebrew-Bold.ttf",
+        "/usr/share/fonts/opentype/noto/NotoSerifHebrew-Bold.ttf",
+        "~/.local/share/fonts/NotoSansHebrew-Bold.ttf",
+        "~/.fonts/NotoSansHebrew-Bold.ttf",
+    ]) or regular
+    if regular is None:
+        raise RuntimeError(
+            "Hebrew/Yiddish rendering requested, but no Noto Hebrew font was found. "
+            "Install Noto Sans Hebrew (for Debian/Ubuntu: fonts-noto-core) and try again."
+        )
+    if HEBREW_FONT_NAME not in pdfmetrics.getRegisteredFontNames():
+        pdfmetrics.registerFont(TTFont(HEBREW_FONT_NAME, str(regular)))
+    if HEBREW_BOLD_FONT_NAME not in pdfmetrics.getRegisteredFontNames():
+        pdfmetrics.registerFont(TTFont(HEBREW_BOLD_FONT_NAME, str(bold)))
+
+def contains_hebrew(text):
+    return bool(HEBREW_RE.search(str(text or "")))
+
+# Explicit directional embedding characters.  python-bidi 0.6.x implements
+# these reliably; unlike the newer isolate controls, they are accepted by both
+# its Python and Rust-backed implementations.
+_LRE = "\u202A"   # begin left-to-right embedding
+_PDF = "\u202C"   # end directional embedding
+
+# An ASCII/Latin "island" inside Hebrew prose.  Spaces are included only when
+# they join Latin words, so "Eretz Or", "Ost | ra | liye" and similar phrases
+# stay in their natural LTR order without swallowing surrounding Hebrew.
+_LATIN_ISLAND_RE = re.compile(
+    r"""(?x)
+    (?<![A-Za-z0-9])
+    (
+      [A-Za-z0-9]+(?:[-./+][A-Za-z0-9]+)*
+      (?:
+        \s+
+        (?:[|+→=/:-]\s*)?
+        [A-Za-z0-9]+(?:[-./+][A-Za-z0-9]+)*
+      )*
+    )
+    (?![A-Za-z0-9])
+    """
+)
+
+def _protect_latin_islands(text):
+    """Mark embedded Latin phrases as LTR before applying the bidi algorithm."""
+    return _LATIN_ISLAND_RE.sub(lambda m: _LRE + m.group(1) + _PDF, text)
+
+def _bidi_visual_text(text):
+    """Convert mixed Hebrew/Latin Unicode text to visual order for ReportLab."""
+    if not (ENABLED_LANGUAGES & {"hebrew", "yiddish"}) or not contains_hebrew(text):
+        return text
+    if bidi_get_display is None:
+        raise RuntimeError(
+            "Hebrew/Yiddish rendering requires python-bidi. "
+            "Install it for this Python with: python3.9 -m pip install python-bidi"
+        )
+    protected = _protect_latin_islands(text)
+    return bidi_get_display(protected, base_dir="R")
+
+def _font_hebrew_runs(escaped_text):
+    if not (ENABLED_LANGUAGES & {"hebrew", "yiddish"}):
+        return escaped_text
+    return HEBREW_RUN_RE.sub(
+        lambda m: f'<font name="{HEBREW_FONT_NAME}">{m.group(0)}</font>',
+        escaped_text,
+    )
 
 def strip_front_matter(text):
     if text.startswith("---"):
@@ -229,29 +342,88 @@ def extract_slide_config(metadata):
     return {"title_font": slide.get("title_font"), "heading_font": slide.get("heading_font"), "bullet_font": slide.get("bullet_font"), "body_font": slide.get("body_font"), "background_dim": _f(slide.get("background_dim", 0.35), 0.35), "title_align": str(slide.get("title_align", "left")).strip().lower(), "body_align": str(slide.get("body_align", "left")).strip().lower()}
 
 def markup_inline(text):
+    text = _bidi_visual_text(text)
     text = html.escape(text)
+    text = _font_hebrew_runs(text)
     text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
     text = re.sub(r"(?<!\*)\*(.+?)\*(?!\*)", r"<i>\1</i>", text)
     return text
 
 def emit_rich_text(flow, content, body_style, bullet_style, aside_style, story_path):
     lines = content.splitlines()
-    paragraph_buffer, bullet_buffer = [], []
+    paragraph_buffer, bullet_buffer, quote_buffer = [], [], []
+
     def flush_paragraph():
         if not paragraph_buffer: return
         paragraph_text = " ".join(x.strip() for x in paragraph_buffer if x.strip()).strip()
         paragraph_buffer.clear()
         if not paragraph_text: return
         style = aside_style if paragraph_text.startswith("(") and paragraph_text.endswith(")") else body_style
+        if contains_hebrew(paragraph_text) and (ENABLED_LANGUAGES & {"hebrew", "yiddish"}):
+            style = ParagraphStyle(style.name + "_RTL", parent=style, alignment=TA_RIGHT)
         flow.append(Paragraph(markup_inline(paragraph_text), style))
+
     def flush_bullets():
         if not bullet_buffer: return
         items = [ListItem(Paragraph(markup_inline(item.strip()), bullet_style), leftIndent=0) for item in bullet_buffer if item.strip()]
         bullet_buffer.clear()
         if items:
             flow.append(ListFlowable(items, bulletType="bullet", start="circle", leftIndent=14, bulletFontName="Helvetica", bulletFontSize=9, bulletOffsetY=2, spaceBefore=2, spaceAfter=8))
+
+    def flush_quote():
+        if not quote_buffer:
+            return
+
+        # A line beginning with the Unicode box character "│" is a
+        # Heichalot-CMS ChatGPT response line.  Do not print the character;
+        # render the whole consecutive group as one block with a real rule.
+        quote_parts = []
+        paragraph_lines = []
+
+        def flush_quote_paragraph():
+            if not paragraph_lines:
+                return
+            text = " ".join(x.strip() for x in paragraph_lines if x.strip()).strip()
+            paragraph_lines.clear()
+            if text:
+                quote_parts.append(Paragraph(markup_inline(text), body_style))
+
+        for quoted_line in quote_buffer:
+            if quoted_line.strip():
+                paragraph_lines.append(quoted_line)
+            else:
+                flush_quote_paragraph()
+        flush_quote_paragraph()
+        quote_buffer.clear()
+
+        if not quote_parts:
+            return
+
+        table = Table([[quote_parts]], colWidths=[None], hAlign="LEFT")
+        table.setStyle(TableStyle([
+            ("LINEBEFORE", (0, 0), (0, -1), 2, colors.HexColor("#4b5563")),
+            ("LEFTPADDING", (0, 0), (0, -1), 10),
+            ("RIGHTPADDING", (0, 0), (0, -1), 0),
+            ("TOPPADDING", (0, 0), (0, -1), 0),
+            ("BOTTOMPADDING", (0, 0), (0, -1), 2),
+            ("VALIGN", (0, 0), (0, -1), "TOP"),
+        ]))
+        flow.append(table)
+        flow.append(Spacer(1, 2 * mm))
+
     for raw_line in lines:
         line = raw_line.strip()
+
+        # ChatGPT-style response block: every line is prefixed with "│".
+        # A bare "│" preserves a paragraph break inside the block.
+        if line.startswith("│"):
+            flush_paragraph(); flush_bullets()
+            quote_buffer.append(line[1:].lstrip())
+            continue
+
+        # Any non-quote line closes the current response block.
+        flush_quote()
+
         if not line:
             flush_paragraph(); flush_bullets(); continue
         if line.startswith("* "):
@@ -274,7 +446,8 @@ def emit_rich_text(flow, content, body_style, bullet_style, aside_style, story_p
         if line.endswith(":"):
             flush_paragraph(); flush_bullets(); paragraph_buffer.append(line); flush_paragraph(); continue
         flush_bullets(); paragraph_buffer.append(line)
-    flush_paragraph(); flush_bullets()
+
+    flush_quote(); flush_paragraph(); flush_bullets()
 
 def build_story_flowables(title, blocks, metadata=None, header_fields=None, illustration_path=None, image_height_mm=65, image_align="center", heading_colors=None, story_path=None):
     story_path = Path(story_path) if story_path is not None else Path("story.md")
@@ -285,6 +458,8 @@ def build_story_flowables(title, blocks, metadata=None, header_fields=None, illu
     body_style = ParagraphStyle("Body", parent=styles["Normal"], fontName="Helvetica", fontSize=11.2, leading=16, textColor=colors.HexColor("#111827"), spaceAfter=8, alignment=TA_LEFT)
     bullet_style = ParagraphStyle("BulletBody", parent=body_style, leftIndent=0, firstLineIndent=0, spaceAfter=2)
     aside_style = ParagraphStyle("Aside", parent=body_style, fontName="Helvetica-Oblique", textColor=colors.HexColor("#374151"), leftIndent=8, spaceAfter=8)
+    if contains_hebrew(title) and (ENABLED_LANGUAGES & {"hebrew", "yiddish"}):
+        title_style.alignment = TA_RIGHT
     flow = [Paragraph(markup_inline(title), title_style), Spacer(1, 2 * mm)]
     header_items = select_header_items(metadata or {}, header_fields=header_fields)
     if header_items:
@@ -419,7 +594,8 @@ def build_slide_flowables(deck_title, slides, story_path, slide_config=None):
             flow.append(PageBreak())
     return flow
 
-def generate_pdf(input_path=".", output_path=None, image_height_mm=65, image_align="center", heading_colors=None, header_fields=None, mode="story"):
+def generate_pdf(input_path=".", output_path=None, image_height_mm=65, image_align="center", heading_colors=None, header_fields=None, mode="story", languages=None):
+    configure_languages(languages or set())
     base = Path(input_path)
     if base.is_dir():
         file_map = {"story": "story.md", "summary": "summary.md", "slides": "slides.md"}
@@ -460,6 +636,7 @@ def build_arg_parser():
     parser.add_argument("--image-align", choices=("left","center","right"), default="center", help="Illustration image alignment for story/summary mode.")
     parser.add_argument("--heading-colors", default=None, help="Comma-separated hex colors for dialogue speaker headings.")
     parser.add_argument("--header-fields", default=None, help="Comma-separated metadata fields to display under the title in story/summary mode.")
+    parser.add_argument("--languages", default=None, help="Comma-separated extra languages/scripts to enable, e.g. hebrew,yiddish (aliases: he,yi).")
     return parser
 
 def main(args=None):
@@ -468,7 +645,7 @@ def main(args=None):
     mode = "story"
     if ns.summary: mode = "summary"
     if ns.slides: mode = "slides"
-    out = generate_pdf(input_path=ns.input_path, output_path=ns.output_path, image_height_mm=ns.image_height_mm, image_align=ns.image_align, heading_colors=ns.heading_colors, header_fields=ns.header_fields, mode=mode)
+    out = generate_pdf(input_path=ns.input_path, output_path=ns.output_path, image_height_mm=ns.image_height_mm, image_align=ns.image_align, heading_colors=ns.heading_colors, header_fields=ns.header_fields, mode=mode, languages=parse_languages(ns.languages))
     print(f"Wrote: {out}")
 
 if __name__ == "__main__":
