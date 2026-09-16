@@ -10,6 +10,7 @@ requests>=2.31.0
 Jinja2>=3.1.0
 python-dateutil>=2.9.0
 reportlab
+python-bidi
 send2trash
 notify-py
 requests
