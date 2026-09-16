@@ -1252,24 +1252,23 @@ def remember_chat_message(message: Dict[str, Any]) -> None:
 
 
 def notify_chat_message(cfg: configparser.ConfigParser, sender: str, text: str) -> None:
-    """Deliver an incoming chat to the desktop user via notify-send when possible."""
-    if shutil.which("notify-send") is None:
+    """Deliver an incoming chat to the desktop user as a cross-platform notification."""
+    try:
+        from notifypy import Notify
+    except ImportError:
         return
 
-    args = [
-        "notify-send",
-        f"--app-name={APP_NAME}",
-    ]
+    notification = Notify(default_notification_application_name=APP_NAME)
+    notification.title = f"Message from {sender}"
+    notification.message = text
 
     icon = portrait_path(cfg, sender)
     if icon is not None and icon.is_file():
-        args.append(f"--icon={icon}")
-
-    args += ["Message from " + sender, text]
+        notification.icon = str(icon)
 
     try:
-        subprocess.Popen(args, stderr=subprocess.DEVNULL)
-    except OSError:
+        notification.send()
+    except Exception:
         pass
 
 
