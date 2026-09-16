@@ -49,6 +49,7 @@ import subprocess
 import sys
 import threading
 import time
+import webbrowser
 import pyaml
 from datetime import datetime, timezone
 from multiprocessing import shared_memory
@@ -59,12 +60,13 @@ from urllib import error, request
 import tailcat
 
 try:
-    from flask import Flask, jsonify, request as flask_request, send_file
+    from flask import Flask, jsonify, request as flask_request, send_file, render_template_string
 except ImportError:
     Flask = None
     jsonify = None
     flask_request = None
     send_file = None
+    render_template_string = None
 
 
 APP_NAME = "characterif"
@@ -86,6 +88,7 @@ from config import character_data_dir, platform_data_dir
 
 STATE_DIR = Path.home() / ".config" / APP_NAME
 REGISTRY_CACHE = STATE_DIR / "nodes.json"
+SESSION_LOG = STATE_DIR / "session.json"
 LOCATION_MANIFEST = BASE_DIR / "location-manifest.json"
 
 # Small in-memory display feed. This is deliberately not a durable queue.
@@ -105,6 +108,542 @@ PRESENCE_SHM_SIZE = 64 * 1024
 PRESENCE_HEADER_SIZE = 16
 PRESENCE_WRITE_LOCK = threading.Lock()
 PRESENCE_SHM_OWNER: Optional[shared_memory.SharedMemory] = None
+
+
+MOBILE_LANDING_TEMPLATE = r"""
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>CharacterIF</title>
+  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+  <link href="https://cdn.jsdelivr.net/npm/daisyui@5" rel="stylesheet" type="text/css" />
+</head>
+<body class="min-h-screen bg-base-200">
+  <main class="min-h-screen flex items-center justify-center p-4">
+    <section class="card w-full max-w-md bg-base-100 shadow-xl border border-base-300">
+      <div class="card-body gap-5">
+        <div>
+          <h1 class="text-3xl font-bold">CharacterIF</h1>
+          <p class="text-base-content/60 mt-1">Mobile LAN interface</p>
+        </div>
+
+        <div class="alert alert-info">
+          <span>Connected to <strong>{{ node }}</strong> on your local network.</span>
+        </div>
+
+        <div class="rounded-box bg-base-200 p-4">
+          <div class="text-xs uppercase tracking-wide text-base-content/50">Local web interface</div>
+          <div class="font-mono text-sm break-all mt-1">{{ public_url }}</div>
+        </div>
+
+        <div class="text-sm text-base-content/70">
+          This proof-of-concept is intended for devices on the same LAN. QR pairing and remote mobile access can be added later.
+        </div>
+
+        <div class="card-actions grid grid-cols-2 gap-3 mt-2">
+          <a class="btn btn-primary" href="{{ url_for('mobile_home') }}">Continue</a>
+          <button class="btn btn-ghost" onclick="window.close(); history.back();">Quit</button>
+        </div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
+"""
+
+
+MOBILE_HOME_TEMPLATE = r"""
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>CharacterIF - Home</title>
+  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+  <link href="https://cdn.jsdelivr.net/npm/daisyui@5" rel="stylesheet" type="text/css" />
+  <style>
+    html, body { height: 100%; }
+    body { overscroll-behavior: none; }
+    .safe-bottom { padding-bottom: calc(5.25rem + env(safe-area-inset-bottom)); }
+  </style>
+</head>
+<body class="min-h-full bg-base-200">
+  <div class="min-h-full max-w-xl mx-auto bg-base-100 shadow-xl safe-bottom">
+    <header class="navbar min-h-16 border-b border-base-300 px-3 sticky top-0 z-20 bg-base-100">
+      <div class="flex-1 min-w-0">
+        <div>
+          <div class="font-bold text-lg leading-tight">CharacterIF</div>
+          <div class="text-xs text-base-content/50 truncate">{{ node }}</div>
+        </div>
+      </div>
+      <div class="badge badge-success badge-sm">LAN</div>
+    </header>
+
+    <main class="p-4 space-y-5">
+      <section>
+        <div class="flex items-center justify-between mb-3">
+          <div>
+            <h1 class="text-xl font-semibold">Characters</h1>
+            <p class="text-sm text-base-content/50">Available on this CharacterIF node</p>
+          </div>
+        </div>
+
+        <div id="characters" class="flex gap-3 overflow-x-auto pb-2 snap-x snap-mandatory">
+          <div class="skeleton h-28 w-24 shrink-0"></div>
+          <div class="skeleton h-28 w-24 shrink-0"></div>
+          <div class="skeleton h-28 w-24 shrink-0"></div>
+        </div>
+      </section>
+
+      <section class="card bg-base-200 border border-base-300">
+        <div class="card-body p-4">
+          <h2 class="card-title text-base">Remote viewing</h2>
+          <p class="text-sm text-base-content/60">Open the discussion page and use the existing CharacterIF responder.</p>
+          <div class="card-actions justify-end mt-2">
+            <a class="btn btn-primary btn-sm" href="{{ url_for('mobile_remote_view') }}">Open discussion</a>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <nav class="dock border-t border-base-300 bg-base-100 z-30">
+    <a class="dock-active" href="{{ url_for('mobile_home') }}" aria-label="Home">
+      <svg class="size-[1.2em]" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="currentColor" stroke-linejoin="miter" stroke-linecap="butt"><polyline points="1 11 12 2 23 11" fill="none" stroke="currentColor" stroke-miterlimit="10" stroke-width="2"></polyline><path d="m5,13v7c0,1.105.895,2,2,2h10c1.105,0,2-.895,2-2v-7" fill="none" stroke="currentColor" stroke-linecap="square" stroke-miterlimit="10" stroke-width="2"></path><line x1="12" y1="22" x2="12" y2="18" fill="none" stroke="currentColor" stroke-linecap="square" stroke-miterlimit="10" stroke-width="2"></line></g></svg>
+      <span class="dock-label">Home</span>
+    </a>
+    <a href="{{ url_for('mobile_messages') }}" aria-label="Messages">
+      <svg class="size-[1.2em]" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="currentColor" stroke-linejoin="miter" stroke-linecap="butt"><polyline points="3 14 9 14 9 17 15 17 15 14 21 14" fill="none" stroke="currentColor" stroke-miterlimit="10" stroke-width="2"></polyline><rect x="3" y="3" width="18" height="18" rx="2" ry="2" fill="none" stroke="currentColor" stroke-linecap="square" stroke-miterlimit="10" stroke-width="2"></rect></g></svg>
+      <span class="dock-label">Messages</span>
+    </a>
+    <a href="{{ url_for('mobile_settings') }}" aria-label="Settings">
+      <svg class="size-[1.2em]" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="currentColor" stroke-linejoin="miter" stroke-linecap="butt"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-linecap="square" stroke-miterlimit="10" stroke-width="2"></circle><path d="m22,13.25v-2.5l-2.318-.966c-.167-.581-.395-1.135-.682-1.654l.954-2.318-1.768-1.768-2.318.954c-.518-.287-1.073-.515-1.654-.682l-.966-2.318h-2.5l-.966,2.318c-.581.167-1.135.395-1.654.682l-2.318-.954-1.768,1.768.954,2.318c-.287.518-.515,1.073-.682,1.654l-2.318.966v2.5l2.318.966c.167.581.395,1.135.682,1.654l-.954,2.318,1.768,1.768,2.318-.954c.518.287,1.073.515,1.654.682l.966,2.318h2.5l.966-2.318c.581-.167,1.135-.395,1.654-.682l2.318.954,1.768-1.768-.954-2.318c.287-.518.515-1.073.682-1.654l2.318-.966Z" fill="none" stroke="currentColor" stroke-linecap="square" stroke-miterlimit="10" stroke-width="2"></path></g></svg>
+      <span class="dock-label">Settings</span>
+    </a>
+  </nav>
+
+<script>
+const characterStrip = document.getElementById('characters');
+
+function initials(name) {
+  return (name || '?').split(/\s+/).map(part => part[0]).join('').slice(0, 2).toUpperCase();
+}
+
+async function loadCharacters() {
+  try {
+    const response = await fetch('/api/characters');
+    const data = await response.json();
+    characterStrip.innerHTML = '';
+
+    if (!data.ok || !Array.isArray(data.characters) || data.characters.length === 0) {
+      characterStrip.innerHTML = '<div class="text-sm text-base-content/50 py-6">No characters configured.</div>';
+      return;
+    }
+
+    data.characters.forEach(character => {
+      const card = document.createElement('a');
+      card.className = 'card bg-base-200 border border-base-300 w-28 shrink-0 snap-start hover:bg-base-300 transition-colors';
+      card.href = `{{ url_for('mobile_remote_view') }}?character=${encodeURIComponent(character.name)}`;
+
+      const body = document.createElement('div');
+      body.className = 'card-body items-center p-3 gap-2';
+
+      const avatar = document.createElement('div');
+      avatar.className = 'avatar placeholder';
+
+      const circle = document.createElement('div');
+      circle.className = 'bg-neutral text-neutral-content w-14 rounded-full overflow-hidden';
+
+      const fallback = document.createElement('span');
+      fallback.className = 'text-sm';
+      fallback.textContent = initials(character.name);
+      circle.appendChild(fallback);
+
+      if (character.portrait) {
+        const img = document.createElement('img');
+        img.src = character.portrait;
+        img.alt = character.name;
+        img.className = 'w-full h-full object-cover';
+        img.onerror = () => img.remove();
+        circle.appendChild(img);
+      }
+
+      avatar.appendChild(circle);
+
+      const name = document.createElement('div');
+      name.className = 'font-medium text-sm text-center truncate w-full';
+      name.textContent = character.name;
+
+      const state = document.createElement('div');
+      state.className = 'text-[11px] text-base-content/45';
+      state.textContent = character.local === false ? 'remote' : 'local';
+
+      body.appendChild(avatar);
+      body.appendChild(name);
+      body.appendChild(state);
+      card.appendChild(body);
+      characterStrip.appendChild(card);
+    });
+  } catch (error) {
+    characterStrip.innerHTML = '<div class="text-sm text-error py-6">Unable to load characters.</div>';
+  }
+}
+
+loadCharacters();
+</script>
+</body>
+</html>
+"""
+
+
+MOBILE_REMOTE_VIEW_TEMPLATE = r"""
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>CharacterIF - Remote View</title>
+  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+  <link href="https://cdn.jsdelivr.net/npm/daisyui@5" rel="stylesheet" type="text/css" />
+  <style>
+    html, body { height: 100%; }
+    body { overscroll-behavior: none; }
+    #messages { min-height: 0; }
+    .rv-shell { padding-bottom: calc(4.5rem + env(safe-area-inset-bottom)); }
+    #target-fab {
+      bottom: calc(5rem + env(safe-area-inset-bottom));
+      right: max(1rem, calc((100vw - 36rem) / 2 + 1rem));
+      z-index: 40;
+    }
+  </style>
+</head>
+<body class="h-full bg-base-200">
+  <div class="h-full max-w-xl mx-auto bg-base-100 flex flex-col shadow-xl rv-shell">
+    <header class="navbar min-h-16 border-b border-base-300 px-3 shrink-0">
+      <div class="flex-1 min-w-0">
+        <div>
+          <div class="font-bold text-lg leading-tight">Remote View</div>
+          <div class="text-xs text-base-content/50 truncate">{{ node }} · discussion</div>
+        </div>
+      </div>
+      <div class="badge badge-success badge-sm">LAN</div>
+    </header>
+
+    <main id="messages" class="flex-1 overflow-y-auto p-3 space-y-2">
+      <div class="text-center text-sm text-base-content/50 py-8" id="empty-state">
+        Choose a character and start the discussion.
+      </div>
+    </main>
+
+    <div id="status" class="hidden px-3 py-2 text-sm border-t border-base-300 bg-base-200"></div>
+
+    <form id="composer" class="p-3 border-t border-base-300 shrink-0 bg-base-100">
+      <textarea id="message" class="textarea textarea-bordered w-full min-h-12 max-h-32 resize-none" rows="1" placeholder="Message…"></textarea>
+    </form>
+  </div>
+
+  <div id="target-fab" class="fab fab-flower">
+    <div id="target-fab-trigger" tabindex="0" role="button" class="btn btn-lg btn-circle btn-secondary tooltip tooltip-left" data-tip="Choose target" aria-label="Choose target">
+      <span id="target-fab-trigger-icon" class="inline-flex size-8 items-center justify-center rounded-full overflow-hidden">
+        <svg class="size-5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="5" r="2"/><circle cx="12" cy="5" r="2"/><circle cx="19" cy="5" r="2"/><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="12" cy="19" r="2"/><circle cx="19" cy="19" r="2"/></svg>
+      </span>
+    </div>
+  </div>
+
+  <nav class="dock border-t border-base-300 bg-base-100 z-30">
+    <button type="button" id="back-button" aria-label="Back">
+      <span class="text-xl">←</span>
+      <span class="dock-label">Back</span>
+    </button>
+    <button type="button" id="dock-target" aria-label="Current target">
+      <span id="dock-target-icon" class="inline-flex size-7 items-center justify-center rounded-full bg-base-300 overflow-hidden">
+        <svg class="size-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="5" r="2"/><circle cx="12" cy="5" r="2"/><circle cx="19" cy="5" r="2"/><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="12" cy="19" r="2"/><circle cx="19" cy="19" r="2"/></svg>
+      </span>
+      <span id="dock-target-label" class="dock-label">Everyone</span>
+    </button>
+    <button type="button" id="dock-finish" aria-label="Finish session">
+      <svg class="size-[1.2em]" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <path d="M5 12.5 9.2 17 19 7"></path>
+      </svg>
+      <span class="dock-label">Finish</span>
+    </button>
+  </nav>
+
+<script>
+const messages = document.getElementById('messages');
+const emptyState = document.getElementById('empty-state');
+const composer = document.getElementById('composer');
+const messageInput = document.getElementById('message');
+const finishButton = document.getElementById('dock-finish');
+const transcript = [];
+const statusBox = document.getElementById('status');
+const requestedCharacter = new URLSearchParams(window.location.search).get('character');
+const dockTargetIcon = document.getElementById('dock-target-icon');
+const dockTargetLabel = document.getElementById('dock-target-label');
+const targetFab = document.getElementById('target-fab');
+const targetFabTrigger = document.getElementById('target-fab-trigger');
+const targetFabTriggerIcon = document.getElementById('target-fab-trigger-icon');
+let characters = [];
+let currentTarget = requestedCharacter || 'all';
+
+document.getElementById('back-button').addEventListener('click', () => {
+  if (history.length > 1) history.back();
+  else window.location.href = `{{ url_for('mobile_home') }}`;
+});
+
+function targetIconInto(container, target, sizeClass='w-full h-full') {
+  container.innerHTML = '';
+  if (target === 'all') {
+    container.innerHTML = '<svg class="size-5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="5" r="2"/><circle cx="12" cy="5" r="2"/><circle cx="19" cy="5" r="2"/><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="12" cy="19" r="2"/><circle cx="19" cy="19" r="2"/></svg>';
+    return;
+  }
+  const img = document.createElement('img');
+  img.src = `/api/character/${encodeURIComponent(target)}/portrait`;
+  img.alt = target;
+  img.className = `${sizeClass} object-cover`;
+  img.onerror = () => {
+    container.innerHTML = '';
+    container.textContent = target.slice(0, 1).toUpperCase();
+  };
+  container.appendChild(img);
+}
+
+function updateTargetDisplay() {
+  const label = currentTarget === 'all' ? 'Everyone' : currentTarget;
+  dockTargetLabel.textContent = label;
+  targetFabTrigger.dataset.tip = label;
+  targetFabTrigger.setAttribute('aria-label', `Current target: ${label}. Choose target`);
+  targetIconInto(dockTargetIcon, currentTarget);
+  targetIconInto(targetFabTriggerIcon, currentTarget);
+}
+
+function chooseTarget(target) {
+  currentTarget = target;
+  updateTargetDisplay();
+  targetFabTrigger.blur();
+  messageInput.focus();
+}
+
+function makeTargetButton(target, label) {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'tooltip tooltip-left target-action';
+  wrapper.dataset.tip = label;
+
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'btn btn-lg btn-circle target-choice';
+  button.setAttribute('aria-label', label);
+
+  const icon = document.createElement('span');
+  icon.className = 'inline-flex size-8 items-center justify-center rounded-full overflow-hidden';
+  targetIconInto(icon, target);
+  button.appendChild(icon);
+  button.addEventListener('click', () => chooseTarget(target));
+  wrapper.appendChild(button);
+  return wrapper;
+}
+
+function buildTargetFab() {
+  targetFab.querySelectorAll('.target-action').forEach(item => item.remove());
+  const targets = [{target: 'all', label: 'Everyone'}, ...characters.map(c => ({target: c.name, label: c.name}))];
+  targetFab.classList.toggle('fab-flower', targets.length <= 4);
+  targets.forEach(item => targetFab.appendChild(makeTargetButton(item.target, item.label)));
+  if (currentTarget !== 'all' && !characters.some(c => c.name === currentTarget)) currentTarget = 'all';
+  updateTargetDisplay();
+}
+
+function setStatus(text, kind='info') {
+  if (!text) {
+    statusBox.classList.add('hidden');
+    statusBox.textContent = '';
+    return;
+  }
+  statusBox.textContent = text;
+  statusBox.classList.remove('hidden');
+  statusBox.classList.toggle('text-error', kind === 'error');
+  statusBox.classList.toggle('text-base-content/70', kind !== 'error');
+}
+
+function addMessage(who, text, mine=false) {
+  if (emptyState) emptyState.remove();
+  const row = document.createElement('div');
+  row.className = `chat ${mine ? 'chat-end' : 'chat-start'}`;
+
+  const header = document.createElement('div');
+  header.className = 'chat-header text-xs text-base-content/50 mb-1';
+  header.textContent = who;
+
+  const bubble = document.createElement('div');
+  bubble.className = `chat-bubble ${mine ? 'chat-bubble-primary' : ''} whitespace-pre-wrap`;
+  bubble.textContent = text;
+
+  row.appendChild(header);
+  row.appendChild(bubble);
+  messages.appendChild(row);
+  messages.scrollTop = messages.scrollHeight;
+  transcript.push({
+    who,
+    text,
+    mine,
+    time: new Date().toISOString()
+  });
+}
+
+async function loadCharacters() {
+  try {
+    const response = await fetch('/api/characters');
+    const data = await response.json();
+    if (!data.ok || !Array.isArray(data.characters) || data.characters.length === 0) {
+      characters = [];
+      targetFab.querySelectorAll('.target-action').forEach(item => item.remove());
+      dockTargetLabel.textContent = 'No characters';
+      setStatus('No CharacterIF characters are configured.', 'error');
+      return;
+    }
+    characters = data.characters;
+    buildTargetFab();
+  } catch (error) {
+    characters = [];
+    targetFab.querySelectorAll('.target-action').forEach(item => item.remove());
+    dockTargetLabel.textContent = 'Unavailable';
+    setStatus('Could not load CharacterIF characters.', 'error');
+  }
+}
+
+composer.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const text = messageInput.value.trim();
+  if (!text || characters.length === 0) return;
+
+  const targets = currentTarget === 'all' ? characters.map(c => c.name) : [currentTarget];
+  addMessage('You', text, true);
+  messageInput.value = '';
+  document.querySelectorAll('.target-choice').forEach(button => button.disabled = true);
+  setStatus(currentTarget === 'all' ? 'Everyone is working…' : `${currentTarget} is working…`);
+
+  try {
+    for (const character of targets) {
+      const response = await fetch(`/api/character/${encodeURIComponent(character)}/respond`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({text})
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) {
+        throw new Error(`${character}: ${data.error || `HTTP ${response.status}`}`);
+      }
+      addMessage(data.character || character, data.response || '');
+    }
+    setStatus('');
+  } catch (error) {
+    addMessage('System', `Message failed: ${error.message}`);
+    setStatus('Connection or character response failed.', 'error');
+  } finally {
+    document.querySelectorAll('.target-choice').forEach(button => button.disabled = false);
+    messageInput.focus();
+  }
+});
+
+finishButton.addEventListener('click', async () => {
+  finishButton.disabled = true;
+  setStatus('Saving session…');
+  try {
+    const response = await fetch('/api/session/finish', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        page: 'remote-view',
+        target: currentTarget,
+        messages: transcript
+      })
+    });
+    const data = await response.json();
+    if (!response.ok || !data.ok) {
+      throw new Error(data.error || `HTTP ${response.status}`);
+    }
+    setStatus(`Session saved to ${data.path || 'session.json'}.`);
+  } catch (error) {
+    setStatus(`Could not save session: ${error.message}`, 'error');
+  } finally {
+    finishButton.disabled = false;
+  }
+});
+
+document.getElementById('dock-target').addEventListener('click', () => targetFabTrigger.focus());
+
+messageInput.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault();
+    composer.requestSubmit();
+  }
+});
+
+loadCharacters();
+</script>
+</body>
+</html>
+"""
+
+
+MOBILE_MESSAGES_TEMPLATE = r"""
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>CharacterIF - Messages</title>
+  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+  <link href="https://cdn.jsdelivr.net/npm/daisyui@5" rel="stylesheet" type="text/css" />
+</head>
+<body class="min-h-screen bg-base-200">
+  <div class="min-h-screen max-w-xl mx-auto bg-base-100 pb-20">
+    <header class="navbar border-b border-base-300 px-3">
+      <div class="flex-1"><div><div class="font-bold text-lg">Messages</div><div class="text-xs text-base-content/50">{{ node }} · people / IM</div></div></div>
+      <div class="badge badge-ghost badge-sm">placeholder</div>
+    </header>
+    <main class="p-4 space-y-4">
+      <div class="alert"><span>This page is intentionally basic for now. It will become the direct person-to-person messaging link to the desktop node.</span></div>
+      <div class="chat chat-start"><div class="chat-header text-xs text-base-content/50">Desktop</div><div class="chat-bubble">Messages will appear here.</div></div>
+      <div class="join w-full pt-4"><input class="input input-bordered join-item flex-1" placeholder="Message…" disabled><button class="btn btn-primary join-item" disabled>Send</button></div>
+    </main>
+  </div>
+  <nav class="dock border-t border-base-300 bg-base-100 z-30">
+    <a href="{{ url_for('mobile_home') }}" aria-label="Home">
+      <svg class="size-[1.2em]" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="currentColor" stroke-linejoin="miter" stroke-linecap="butt"><polyline points="1 11 12 2 23 11" fill="none" stroke="currentColor" stroke-miterlimit="10" stroke-width="2"></polyline><path d="m5,13v7c0,1.105.895,2,2,2h10c1.105,0,2-.895,2-2v-7" fill="none" stroke="currentColor" stroke-linecap="square" stroke-miterlimit="10" stroke-width="2"></path><line x1="12" y1="22" x2="12" y2="18" fill="none" stroke="currentColor" stroke-linecap="square" stroke-miterlimit="10" stroke-width="2"></line></g></svg><span class="dock-label">Home</span></a>
+    <a class="dock-active" href="{{ url_for('mobile_messages') }}" aria-label="Messages">
+      <svg class="size-[1.2em]" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="currentColor" stroke-linejoin="miter" stroke-linecap="butt"><polyline points="3 14 9 14 9 17 15 17 15 14 21 14" fill="none" stroke="currentColor" stroke-miterlimit="10" stroke-width="2"></polyline><rect x="3" y="3" width="18" height="18" rx="2" ry="2" fill="none" stroke="currentColor" stroke-linecap="square" stroke-miterlimit="10" stroke-width="2"></rect></g></svg><span class="dock-label">Messages</span></a>
+    <a href="{{ url_for('mobile_settings') }}" aria-label="Settings"><span class="text-xl">⚙</span><span class="dock-label">Settings</span></a>
+  </nav>
+</body>
+</html>
+"""
+
+
+MOBILE_SETTINGS_TEMPLATE = r"""
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>CharacterIF - Settings</title>
+  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+  <link href="https://cdn.jsdelivr.net/npm/daisyui@5" rel="stylesheet" type="text/css" />
+</head>
+<body class="min-h-screen bg-base-200">
+  <div class="min-h-screen max-w-xl mx-auto bg-base-100 pb-20">
+    <header class="navbar border-b border-base-300 px-3"><div><div class="font-bold text-lg">Settings</div><div class="text-xs text-base-content/50">{{ node }}</div></div></header>
+    <main class="p-4"><div class="card bg-base-200 border border-base-300"><div class="card-body"><h2 class="card-title">Settings</h2><p class="text-base-content/60">Placeholder for mobile settings. Nothing here is wired yet.</p></div></div></main>
+  </div>
+  <nav class="dock border-t border-base-300 bg-base-100 z-30">
+    <a href="{{ url_for('mobile_home') }}"><span class="text-xl">⌂</span><span class="dock-label">Home</span></a>
+    <a href="{{ url_for('mobile_messages') }}"><span class="text-xl">▣</span><span class="dock-label">Messages</span></a>
+    <a class="dock-active" href="{{ url_for('mobile_settings') }}"><span class="text-xl">⚙</span><span class="dock-label">Settings</span></a>
+  </nav>
+</body>
+</html>
+"""
 
 
 def utcnow() -> str:
@@ -695,6 +1234,33 @@ def api_port(cfg: configparser.ConfigParser) -> int:
     return int(character_cfg_get(cfg, "api_port", DEFAULT_PORT))
 
 
+def lan_ip_address() -> str:
+    """Best-effort IPv4 address suitable for another device on the local LAN."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        # UDP connect selects the outbound interface without sending application data.
+        sock.connect(("8.8.8.8", 80))
+        address = sock.getsockname()[0]
+        if address and not address.startswith("127."):
+            return address
+    except OSError:
+        pass
+    finally:
+        sock.close()
+
+    try:
+        for address in socket.gethostbyname_ex(socket.gethostname())[2]:
+            if address and not address.startswith("127."):
+                return address
+    except OSError:
+        pass
+    return "127.0.0.1"
+
+
+def mobile_public_url(port: int) -> str:
+    return f"http://{lan_ip_address()}:{port}/mobile"
+
+
 def daemon_url(cfg: configparser.ConfigParser) -> str:
     bind = character_cfg_get(cfg, "api_host", DEFAULT_BIND)
     if bind in ("0.0.0.0", "::"):
@@ -1058,6 +1624,45 @@ def make_app() -> "Flask":
 
     # --- Character / AI display API --------------------------------------
 
+
+    @app.get("/mobile")
+    def mobile_landing():
+        port = api_port(cfg)
+        return render_template_string(
+            MOBILE_LANDING_TEMPLATE,
+            node=local_node_name(cfg),
+            public_url=mobile_public_url(port),
+        )
+
+    @app.get("/mobile/home")
+    @app.get("/mobile/app")
+    def mobile_home():
+        return render_template_string(
+            MOBILE_HOME_TEMPLATE,
+            node=local_node_name(cfg),
+        )
+
+    @app.get("/mobile/remote-view")
+    def mobile_remote_view():
+        return render_template_string(
+            MOBILE_REMOTE_VIEW_TEMPLATE,
+            node=local_node_name(cfg),
+        )
+
+    @app.get("/mobile/messages")
+    def mobile_messages():
+        return render_template_string(
+            MOBILE_MESSAGES_TEMPLATE,
+            node=local_node_name(cfg),
+        )
+
+    @app.get("/mobile/settings")
+    def mobile_settings():
+        return render_template_string(
+            MOBILE_SETTINGS_TEMPLATE,
+            node=local_node_name(cfg),
+        )
+
     @app.get("/")
     def index():
         # The public CharacterIF index is intentionally just JSON.  Only local
@@ -1128,6 +1733,54 @@ def make_app() -> "Flask":
             return jsonify(result)
         except Exception as exc:
             return jsonify({"ok": False, "error": str(exc), "name": name}), 502
+
+
+    @app.post("/api/session/finish")
+    def api_session_finish():
+        """Append a lightweight mobile Remote View snapshot to session.json."""
+        body = flask_request.get_json(silent=True) or {}
+        messages = body.get("messages")
+        if not isinstance(messages, list):
+            return jsonify({"ok": False, "error": "messages must be a list"}), 400
+
+        ensure_state_dir()
+        payload = {
+            "version": 1,
+            "sessions": [],
+        }
+        if SESSION_LOG.is_file():
+            try:
+                existing = json.loads(SESSION_LOG.read_text(encoding="utf-8"))
+                if isinstance(existing, dict):
+                    payload = existing
+            except Exception:
+                # Keep this endpoint intentionally forgiving during the prototype phase.
+                payload = {"version": 1, "sessions": []}
+
+        sessions = payload.setdefault("sessions", [])
+        if not isinstance(sessions, list):
+            sessions = []
+            payload["sessions"] = sessions
+
+        session = {
+            "finished": utcnow(),
+            "node": local_node_name(cfg),
+            "page": body.get("page") or "remote-view",
+            "target": body.get("target") or "all",
+            "messages": messages,
+        }
+        sessions.append(session)
+
+        tmp = SESSION_LOG.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        tmp.replace(SESSION_LOG)
+
+        return jsonify({
+            "ok": True,
+            "saved": True,
+            "path": str(SESSION_LOG),
+            "messages": len(messages),
+        })
 
 
     @app.get("/api/location")
@@ -1283,6 +1936,27 @@ def run_flask(cfg: configparser.ConfigParser, bind=None, port=None) -> int:
     return 0
 
 
+def run_mobile_web(cfg: configparser.ConfigParser, bind: Optional[str] = None,
+                   port: Optional[int] = None, open_browser: bool = False) -> int:
+    """Run the LAN-only mobile-first CharacterIF web interface."""
+    bind = bind or "0.0.0.0"
+    port = port or api_port(cfg)
+    url = mobile_public_url(port)
+
+    print(f"\n{APP_NAME}: mobile LAN web interface")
+    print(f"Local web interface:\n  {url}")
+    print("\nOpen that address on a phone connected to the same LAN.")
+    print("QR code, connection/busy state, and remote mobile access are intentionally deferred.")
+
+    if open_browser:
+        local_url = f"http://127.0.0.1:{port}/mobile"
+        threading.Timer(0.7, lambda: webbrowser.open(local_url)).start()
+
+    app = make_app()
+    app.run(host=bind, port=port, threaded=True, use_reloader=False)
+    return 0
+
+
 def api_request(method: str, path: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     cfg = load_config()
     url = daemon_url(cfg) + path
@@ -1330,7 +2004,7 @@ def cmd_start(args) -> int:
 
     print(f"\ncharacterif node: {me['node']}")
     print("Tailcat listener: ready")
-    print(f"Tailcat address: {address[:45]}{'...' if len(address) > 45 else ''}")
+    print(f"Tailcat address: {address}")
 
     _, code = start_croc_send_text(payload)
 
@@ -1682,6 +2356,12 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--port", type=int)
     s.add_argument("--croc-timeout", type=int, default=300)
 
+
+    s = sub.add_parser("web", help="run the mobile-first LAN web interface")
+    s.add_argument("--bind", default="0.0.0.0")
+    s.add_argument("--port", type=int)
+    s.add_argument("--open", action="store_true", help="open the landing page in the desktop browser")
+
     s = sub.add_parser("server", help="run API/Tailcat server without croc pairing")
     s.add_argument("--bind")
     s.add_argument("--port", type=int)
@@ -1763,6 +2443,9 @@ def main() -> int:
 
         if args.command == "join":
             return cmd_join(args)
+
+        if args.command == "web":
+            return run_mobile_web(cfg, bind=args.bind, port=args.port, open_browser=args.open)
 
         if args.command == "server":
             port = args.port or api_port(cfg)
