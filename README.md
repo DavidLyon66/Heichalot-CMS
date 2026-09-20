@@ -47,7 +47,7 @@ The project emphasizes **clarity and reproducibility over technical complexity**
 
 ## Features
 
-- **Remote-Viewing** - with Gemma3 and Ollama, if installed
+- **Offline Ai Remote-Viewing** - with Gemma3 and Ollama, if installed
 - **Entry management** — create, list, and search CMS entries with structured metadata (location, year, source, tags)
 - **PDF rendering** — story to PDF via ReportLab with dialogue, prose, slides, and images
 - **HTML rendering** — standalone or fragment HTML output
