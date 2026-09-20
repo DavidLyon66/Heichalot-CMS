@@ -47,12 +47,13 @@ The project emphasizes **clarity and reproducibility over technical complexity**
 
 ## Features
 
+- **Remote-Viewing** - with Gemma3 and Ollama, if installed
 - **Entry management** — create, list, and search CMS entries with structured metadata (location, year, source, tags)
 - **PDF rendering** — story to PDF via ReportLab with dialogue, prose, slides, and images
 - **HTML rendering** — standalone or fragment HTML output
 - **Video rendering** — compile story markdown into video via Remotion (React/TypeScript)
 - **Search** — full-text and metadata search across entries
-- **LAN AI chat** — MQTT-based controller for local Ollama-powered AI conversations
+- **LAN AI chat** — Tailcat-based controller for local Ollama-powered AI conversations
 - **YouTube import** — pull YouTube transcripts into CMS entries
 - **AI transcript import** — import terminal AI session transcripts into story format
 - **Blender integration** — import base maps and generate 3D scene geometry
@@ -65,7 +66,8 @@ The project emphasizes **clarity and reproducibility over technical complexity**
 
 - Python 3.10+ and pip
 - Node.js 18+ and npm (for video rendering only)
-- Optional: Mosquitto MQTT broker (for LAN AI chat)
+- Optional: Ollama & Gemma3
+- Tailcat (for WAN & LAN AI chat)
 
 ### Setup
 
@@ -78,11 +80,10 @@ python3 tools/config.py --setup
 
 The config setup will prompt for your CMS content directory (default: `~/Documents/heichalot-cms/cms`).
 
-### Video rendering (optional)
+### Ollama Ofline Ai Remote Viewing (optional)
 
 ```bash
-cd videorender
-npm install
+ollama pull gemma3
 ```
 
 ---
