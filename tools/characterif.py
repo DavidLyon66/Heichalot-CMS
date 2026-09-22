@@ -108,6 +108,8 @@ DEFAULT_PORTRAIT_SVG = """\
 
 CHILDREN = []
 CURRENT_TAILCAT_ADDRESS: Optional[str] = None
+CURRENT_CROC_CODE: Optional[str] = None
+WAN_PAIRING_LOCK = threading.Lock()
 
 
 # Volatile character connection status shared between local processes.
@@ -147,14 +149,55 @@ MOBILE_LANDING_TEMPLATE = r"""
           <div class="font-mono text-sm break-all mt-1">{{ public_url }}</div>
         </div>
 
-        <div class="text-sm text-base-content/70">
-          This proof-of-concept is intended for devices on the same LAN. QR pairing and remote mobile access can be added later.
+        <div class="form-control gap-2">
+          <label class="label cursor-pointer justify-start gap-3">
+            <input type="radio" name="connection" value="lan" class="radio radio-primary" checked>
+            <span class="label-text">Wifi (local LAN)</span>
+          </label>
+          <label class="label cursor-pointer justify-start gap-3">
+            <input type="radio" name="connection" value="wan" class="radio radio-primary">
+            <span class="label-text">Mobile Internet (WAN)</span>
+          </label>
         </div>
 
         <div class="card-actions grid grid-cols-2 gap-3 mt-2">
-          <a class="btn btn-primary" href="{{ url_for('mobile_home') }}">Continue</a>
+          <button id="continue-button" class="btn btn-primary">Continue</button>
           <button class="btn btn-ghost" onclick="window.close(); history.back();">Quit</button>
         </div>
+
+        <script>
+          document.getElementById('continue-button').addEventListener('click', () => {
+            const mode = document.querySelector('input[name="connection"]:checked').value;
+            if (mode === 'lan') {
+              window.location.href = {{ url_for('mobile_home')|tojson }};
+              return;
+            }
+
+            const remoteUrl = 'https://heichalot.tech/cms/mobile';
+            const button = document.getElementById('continue-button');
+            button.disabled = true;
+            button.textContent = 'Getting Tailcat address…';
+
+            fetch('/api/mobile/wan-pairing', {method: 'POST'})
+              .then(async response => {
+                const data = await response.json();
+                if (!response.ok || !data.ok) {
+                  throw new Error(data.error || `HTTP ${response.status}`);
+                }
+                const proceed = confirm(`Proceed with Tailcat address '${data.tailcat_address}' ?`);
+                if (proceed) {
+                  // The fragment is kept in the browser and is not sent to
+                  // heichalot.tech as part of the HTTP request.
+                  window.location.href = remoteUrl + '#tailcat=' + encodeURIComponent(data.tailcat_address);
+                }
+              })
+              .catch(error => alert(`Could not get Tailcat address: ${error.message}`))
+              .finally(() => {
+                button.disabled = false;
+                button.textContent = 'Continue';
+              });
+          });
+        </script>
       </div>
     </section>
   </main>
@@ -1674,7 +1717,25 @@ def make_app() -> "Flask":
             MOBILE_LANDING_TEMPLATE,
             node=local_node_name(cfg),
             public_url=mobile_public_url(port),
+            croc_code=CURRENT_CROC_CODE,
         )
+
+    @app.post("/api/mobile/wan-pairing")
+    def mobile_wan_pairing():
+        """Return this node's Tailcat address for the hosted WAN browser."""
+        try:
+            with WAN_PAIRING_LOCK:
+                address = CURRENT_TAILCAT_ADDRESS or start_tailcat_listener(api_port(cfg))
+                me = identity_document(cfg, address)
+
+            return jsonify({
+                "ok": True,
+                "tailcat_address": address,
+                "api_port": me["api_port"],
+                "node": me["node"],
+            })
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 500
 
     @app.get("/mobile/home")
     @app.get("/mobile/app")
@@ -1991,8 +2052,13 @@ def run_mobile_web(cfg: configparser.ConfigParser, bind: Optional[str] = None,
     port = port or api_port(cfg)
     url = mobile_public_url(port)
 
+    # WAN mode needs the same Tailcat listener used by the normal server/start paths.
+    # Starting it here also makes the address visible immediately for diagnostics.
+    address = CURRENT_TAILCAT_ADDRESS or start_tailcat_listener(port)
+
     print(f"\n{APP_NAME}: mobile LAN web interface")
     print(f"Local web interface:\n  {url}")
+    print(f"Tailcat address:\n  {address}")
     print("\nOpen that address on a phone connected to the same LAN.")
     print("QR code, connection/busy state, and remote mobile access are intentionally deferred.")
 
@@ -2042,6 +2108,8 @@ def print_result(obj: Any, raw=False) -> int:
 
 
 def cmd_start(args) -> int:
+    global CURRENT_CROC_CODE
+
     cfg = load_config()
     port = args.port or api_port(cfg)
 
@@ -2055,6 +2123,7 @@ def cmd_start(args) -> int:
     print(f"Tailcat address: {address}")
 
     _, code = start_croc_send_text(payload)
+    CURRENT_CROC_CODE = code
 
     print("\nPAIRING CODE")
     print(f"  {code}")
