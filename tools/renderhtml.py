@@ -100,43 +100,14 @@ def has_dialog_blocks(text: str) -> bool:
 
 
 def preprocess_dialogs(text: str) -> str:
-    """Convert CMS dialogue blocks to ordinary Markdown H3 sections."""
-    lines = text.splitlines(keepends=True)
+    """Convert CMS dialogue delimiters to Markdown headings; preserve content."""
     result: List[str] = []
-    in_dialog = False
-    current_char: Optional[str] = None
-    in_paren = False
-
-    for line in lines:
+    for line in text.splitlines(keepends=True):
         match = DIALOG_OPEN_RE.match(line)
         if match:
-            current_char = match.group(1)
-            result.append(f"### {current_char}\n")
-            in_dialog = True
-            in_paren = False
-            continue
-
-        if DIALOG_CLOSE_RE.match(line):
-            in_dialog = False
-            current_char = None
-            in_paren = False
-            continue
-
-        if in_dialog and current_char and current_char.lower() == "ai":
-            stripped = line.lstrip()
-            if in_paren:
-                if ")" in stripped:
-                    in_paren = False
-                continue
-            if stripped.startswith("("):
-                if ")" not in stripped:
-                    in_paren = True
-                    continue
-                if re.search(r'\)[\.,!?;:]*\s*$', stripped):
-                    continue
-
-        result.append(line)
-
+            result.append(f"### {match.group(1)}\n")
+        elif not DIALOG_CLOSE_RE.match(line):
+            result.append(line)
     return "".join(result)
 
 

@@ -1,6 +1,7 @@
 # renderpdf_slideparser_body_v2.py
 from pathlib import Path
-import re, html, hashlib, argparse
+import re, html, hashlib, argparse, shutil, subprocess
+from datetime import datetime
 _real_md5 = hashlib.md5
 def _compat_md5(*args, **kwargs):
     kwargs.pop("usedforsecurity", None)
@@ -30,6 +31,82 @@ HEBREW_RUN_RE = re.compile(r'([\u0590-\u05FF\uFB1D-\uFB4F]+(?:[ \u05BE׳״]+[\u0
 HEBREW_FONT_NAME = "HeichalotHebrew"
 HEBREW_BOLD_FONT_NAME = "HeichalotHebrewBold"
 ENABLED_LANGUAGES = set()
+
+LARGE_IMAGE_BYTES = 800 * 1024
+PUBLISH_IMAGE_MAX_DIMENSION = 1200
+PUBLISH_IMAGE_JPEG_QUALITY = 78
+
+def parse_bool(value):
+    value = str(value).strip().lower()
+    if value in ("1", "true", "yes", "y", "on"):
+        return True
+    if value in ("0", "false", "no", "n", "off"):
+        return False
+    raise argparse.ArgumentTypeError("expected true or false")
+
+def check_image_sizes(base_dir):
+    """Reduce oversized images in <base_dir>/images before rendering.
+
+    Originals are preserved in <base_dir>/private.  This deliberately mirrors
+    publishentry.py's ImageMagick settings, but processes every image without
+    prompting so it can act as a lightweight render preflight.
+    """
+    base_dir = Path(base_dir)
+    images_dir = base_dir / "images"
+    if not images_dir.is_dir():
+        return
+
+    images = sorted(
+        p for p in images_dir.iterdir()
+        if p.is_file() and p.suffix.lower() in {".jpg", ".jpeg", ".png"}
+    )
+    large_images = []
+    for image in images:
+        try:
+            if image.stat().st_size > LARGE_IMAGE_BYTES:
+                large_images.append(image)
+        except OSError:
+            pass
+    if not large_images:
+        return
+
+    which_result = subprocess.run(["which", "convert"], capture_output=True, text=True)
+    if which_result.returncode != 0:
+        print("⚠ Large images found, but ImageMagick 'convert' is not installed; leaving them unchanged.")
+        return
+    convert_cmd = which_result.stdout.strip() or "convert"
+    private_dir = base_dir / "private"
+    private_dir.mkdir(parents=True, exist_ok=True)
+    geometry = f"{PUBLISH_IMAGE_MAX_DIMENSION}x{PUBLISH_IMAGE_MAX_DIMENSION}>"
+
+    for image in large_images:
+        size_kb = image.stat().st_size / 1024
+        temp_output = images_dir / f".{image.stem}-renderpdf-reduced.jpg"
+        try:
+            subprocess.run([convert_cmd, str(image), "-resize", geometry, "-strip", "-quality", str(PUBLISH_IMAGE_JPEG_QUALITY), str(temp_output)], check=True)
+        except (OSError, subprocess.CalledProcessError) as exc:
+            if temp_output.exists():
+                temp_output.unlink()
+            print(f"⚠ Image reduction failed for {image.name}; original left unchanged: {exc}")
+            continue
+        if not temp_output.exists() or temp_output.stat().st_size == 0:
+            if temp_output.exists():
+                temp_output.unlink()
+            print(f"⚠ Image reduction produced no output for {image.name}; original left unchanged.")
+            continue
+
+        private_original = private_dir / image.name
+        if private_original.exists():
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            private_original = private_dir / f"{image.stem}-{stamp}{image.suffix}"
+        output_image = image.with_suffix(".jpg")
+        shutil.move(str(image), str(private_original))
+        if output_image.exists() and output_image != image:
+            output_image.unlink()
+        temp_output.replace(output_image)
+        new_size_kb = output_image.stat().st_size / 1024
+        print(f"✔ Reduced image: {image.name} ({size_kb:.0f} KB → {new_size_kb:.0f} KB)")
+        print(f"  Original moved to: {private_original}")
 
 def parse_languages(value):
     if not value:
@@ -349,9 +426,59 @@ def markup_inline(text):
     text = re.sub(r"(?<!\*)\*(.+?)\*(?!\*)", r"<i>\1</i>", text)
     return text
 
+def _markdown_table_cells(line):
+    """Return pipe-separated cells, respecting escaped literal pipes."""
+    line = line.strip()
+    if not line.startswith("|"):
+        return None
+    line = line.strip("|")
+    return [cell.strip().replace(r"\|", "|") for cell in re.split(r"(?<!\\)\|", line)]
+
+
+def _markdown_table_separator(cells):
+    return bool(cells) and all(re.fullmatch(r":?-{3,}:?", c.strip()) for c in cells)
+
+
+def _append_markdown_table(flow, rows, body_style):
+    """Render a standard Markdown table as a splitting ReportLab table."""
+    if not rows:
+        return
+    count = len(rows[0])
+    if not count:
+        return
+    # A4 story mode has 170 mm usable width (20 mm margins each side).
+    available_width = 170 * mm
+    widths = [available_width / count] * count
+    cell_style = ParagraphStyle("MarkdownTableCell", parent=body_style,
+        fontSize=9, leading=12, spaceAfter=0)
+    header_style = ParagraphStyle("MarkdownTableHeader", parent=cell_style,
+        fontName="Helvetica-Bold", textColor=colors.white)
+    data = []
+    for row_index, row in enumerate(rows):
+        padded = (row + [""] * count)[:count]
+        style = header_style if row_index == 0 else cell_style
+        data.append([Paragraph(markup_inline(cell), style) for cell in padded])
+    table = Table(data, colWidths=widths, repeatRows=1, hAlign="LEFT")
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#374151")),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f3f4f6")]),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("LINEBELOW", (0, 0), (-1, 0), 0.5, colors.HexColor("#d1d5db")),
+    ]))
+    flow.append(table)
+    flow.append(Spacer(1, 4 * mm))
+
+
 def emit_rich_text(flow, content, body_style, bullet_style, aside_style, story_path):
-    lines = content.splitlines()
+    # Do not use splitlines(): Python treats ASCII FF (0x0C) as a line boundary
+    # and would discard the page-break marker before we can process it.
+    lines = content.split("\n")
     paragraph_buffer, bullet_buffer, quote_buffer = [], [], []
+    table_buffer = []
 
     def flush_paragraph():
         if not paragraph_buffer: return
@@ -411,7 +538,44 @@ def emit_rich_text(flow, content, body_style, bullet_style, aside_style, story_p
         flow.append(table)
         flow.append(Spacer(1, 2 * mm))
 
-    for raw_line in lines:
+    def flush_table():
+        if table_buffer:
+            _append_markdown_table(flow, table_buffer, body_style)
+            table_buffer.clear()
+
+    for line_index, raw_line in enumerate(lines):
+        # Recognise a table only when a header is followed by a separator.
+        cells = _markdown_table_cells(raw_line)
+        if cells is not None:
+            if table_buffer and _markdown_table_separator(cells) and len(cells) == len(table_buffer[0]):
+                continue
+            if table_buffer:
+                if len(cells) == len(table_buffer[0]) and not _markdown_table_separator(cells):
+                    table_buffer.append(cells)
+                    continue
+                flush_table()
+            if line_index + 1 < len(lines):
+                separator = _markdown_table_cells(lines[line_index + 1])
+                if separator is not None and len(separator) == len(cells) and _markdown_table_separator(separator):
+                    flush_quote(); flush_paragraph(); flush_bullets()
+                    table_buffer.append(cells)
+                    continue
+        if table_buffer:
+            flush_table()
+        # The separator is consumed logically, not added to the PDF.
+        if cells is not None and _markdown_table_separator(cells) and line_index > 0:
+            previous = _markdown_table_cells(lines[line_index - 1])
+            if previous is not None and len(previous) == len(cells):
+                continue
+        # ASCII Form Feed (FF, 0x0C) at the front of a line means new page.
+        # Keeping this test before strip() is important because strip() removes FF.
+        if raw_line.startswith("\f") or raw_line.startswith("\\ff") or raw_line.startswith("\\formfeed"):
+            flush_quote(); flush_paragraph(); flush_bullets()
+            flow.append(PageBreak())
+            raw_line = raw_line[1:] if raw_line.startswith("\f") else ""
+            if not raw_line.strip():
+                continue
+
         line = raw_line.strip()
 
         # ChatGPT-style response block: every line is prefixed with "│".
@@ -426,7 +590,27 @@ def emit_rich_text(flow, content, body_style, bullet_style, aside_style, story_p
 
         if not line:
             flush_paragraph(); flush_bullets(); continue
-        if line.startswith("* "):
+
+        # Markdown headings inside the story body.  parse_story() consumes the
+        # first H1 as the document title; combined files leave later headings
+        # here, so render them rather than printing the # characters literally.
+        heading_match = re.match(r"^(#{1,6})\s+(.+)$", line)
+        if heading_match:
+            flush_paragraph(); flush_bullets()
+            level = len(heading_match.group(1))
+            heading_text = heading_match.group(2).strip()
+            heading_sizes = {1: 18, 2: 14, 3: 12.5, 4: 11.5, 5: 11, 6: 10.5}
+            heading_style = ParagraphStyle(
+                f"MarkdownHeading{level}", parent=body_style,
+                fontName="Helvetica-Bold", fontSize=heading_sizes[level],
+                leading=heading_sizes[level] + 4,
+                spaceBefore=10 if level > 1 else 14,
+                spaceAfter=6, textColor=colors.HexColor("#1f2937"),
+            )
+            flow.append(Paragraph(markup_inline(heading_text), heading_style))
+            continue
+
+        if line.startswith("* ") or line.startswith("- "):
             flush_paragraph(); bullet_buffer.append(line[2:].strip()); continue
         parsed = parse_inline_image(line)
         if parsed:
@@ -447,7 +631,7 @@ def emit_rich_text(flow, content, body_style, bullet_style, aside_style, story_p
             flush_paragraph(); flush_bullets(); paragraph_buffer.append(line); flush_paragraph(); continue
         flush_bullets(); paragraph_buffer.append(line)
 
-    flush_quote(); flush_paragraph(); flush_bullets()
+    flush_table(); flush_quote(); flush_paragraph(); flush_bullets()
 
 def build_story_flowables(title, blocks, metadata=None, header_fields=None, illustration_path=None, image_height_mm=65, image_align="center", heading_colors=None, story_path=None):
     story_path = Path(story_path) if story_path is not None else Path("story.md")
@@ -594,17 +778,34 @@ def build_slide_flowables(deck_title, slides, story_path, slide_config=None):
             flow.append(PageBreak())
     return flow
 
-def generate_pdf(input_path=".", output_path=None, image_height_mm=65, image_align="center", heading_colors=None, header_fields=None, mode="story", languages=None):
+def generate_pdf(input_path=".", output_path=None, image_height_mm=65, image_align="center", heading_colors=None, header_fields=None, mode="story", languages=None, combine_paths=None, check_image_sizes_enabled=True):
     configure_languages(languages or set())
     base = Path(input_path)
-    if base.is_dir():
+    if combine_paths:
+        story_path = Path(combine_paths[0])
+    elif base.is_dir():
         file_map = {"story": "story.md", "summary": "summary.md", "slides": "slides.md"}
         story_path = base / file_map[mode]
         if not story_path.exists():
             raise FileNotFoundError(f"{story_path} not found")
     else:
         story_path = base
-    text = story_path.read_text(encoding="utf-8")
+
+    # Image preflight runs before Markdown parsing/PDF construction.
+    if check_image_sizes_enabled:
+        check_image_sizes(story_path.parent)
+
+    if combine_paths:
+        combine_files = [Path(p) for p in combine_paths]
+        missing = [str(p) for p in combine_files if not p.is_file()]
+        if missing:
+            raise FileNotFoundError("Combine input not found: " + ", ".join(missing))
+        story_path = combine_files[0]
+        # FF is the traditional ASCII form-feed character.  The renderer below
+        # interprets it as PageBreak() when it appears at the front of a line.
+        text = "\n\f\n".join(p.read_text(encoding="utf-8") for p in combine_files)
+    else:
+        text = story_path.read_text(encoding="utf-8")
     if mode == "slides":
         metadata, title, slides = parse_slides(text)
         output_path = Path(output_path) if output_path else story_path.with_name(f"{safe_filename(title)}.pdf")
@@ -631,12 +832,14 @@ def build_arg_parser():
     parser.add_argument("input_path", nargs="?", default=".", help="Path to entry directory or explicit markdown file (default: current directory).")
     parser.add_argument("output_path", nargs="?", default=None, help="Optional output PDF path.")
     parser.add_argument("--summary", action="store_true", help="Render summary.md instead of story.md.")
+    parser.add_argument("--combine", nargs="+", metavar="FILE", help="Combine Markdown files in the supplied order, inserting an ASCII form feed/page break between files.")
     parser.add_argument("--slides", action="store_true", help="Render slides.md as a landscape slide deck.")
     parser.add_argument("--image-height-mm", type=float, default=65, help="Maximum illustration image height in mm for story/summary mode.")
     parser.add_argument("--image-align", choices=("left","center","right"), default="center", help="Illustration image alignment for story/summary mode.")
     parser.add_argument("--heading-colors", default=None, help="Comma-separated hex colors for dialogue speaker headings.")
     parser.add_argument("--header-fields", default=None, help="Comma-separated metadata fields to display under the title in story/summary mode.")
     parser.add_argument("--languages", default=None, help="Comma-separated extra languages/scripts to enable, e.g. hebrew,yiddish (aliases: he,yi).")
+    parser.add_argument("--check-image-sizes", type=parse_bool, default=True, metavar="true/false", help="Check and reduce oversized images in the images subdirectory before rendering (default: true).")
     return parser
 
 def main(args=None):
@@ -645,7 +848,7 @@ def main(args=None):
     mode = "story"
     if ns.summary: mode = "summary"
     if ns.slides: mode = "slides"
-    out = generate_pdf(input_path=ns.input_path, output_path=ns.output_path, image_height_mm=ns.image_height_mm, image_align=ns.image_align, heading_colors=ns.heading_colors, header_fields=ns.header_fields, mode=mode, languages=parse_languages(ns.languages))
+    out = generate_pdf(input_path=ns.input_path, output_path=ns.output_path, image_height_mm=ns.image_height_mm, image_align=ns.image_align, heading_colors=ns.heading_colors, header_fields=ns.header_fields, mode=mode, languages=parse_languages(ns.languages), combine_paths=ns.combine, check_image_sizes_enabled=ns.check_image_sizes)
     print(f"Wrote: {out}")
 
 if __name__ == "__main__":
