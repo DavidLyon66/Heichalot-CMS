@@ -648,26 +648,341 @@ MOBILE_MESSAGES_TEMPLATE = r"""
   <title>CharacterIF - Messages</title>
   <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
   <link href="https://cdn.jsdelivr.net/npm/daisyui@5" rel="stylesheet" type="text/css" />
+  <style>
+    html, body { min-height: 100%; }
+    body { overscroll-behavior: none; }
+    .safe-bottom { padding-bottom: calc(5.25rem + env(safe-area-inset-bottom)); }
+  </style>
 </head>
 <body class="min-h-screen bg-base-200">
-  <div class="min-h-screen max-w-xl mx-auto bg-base-100 pb-20">
-    <header class="navbar border-b border-base-300 px-3">
-      <div class="flex-1"><div><div class="font-bold text-lg">Messages</div><div class="text-xs text-base-content/50">{{ node }} · people / IM</div></div></div>
-      <div class="badge badge-ghost badge-sm">placeholder</div>
+  <div class="min-h-screen max-w-xl mx-auto bg-base-100 safe-bottom">
+    <header class="navbar border-b border-base-300 px-3 sticky top-0 z-20 bg-base-100">
+      <div class="flex-1">
+        <div>
+          <div id="page-title" class="font-bold text-lg">Messages</div>
+          <div id="page-subtitle" class="text-xs text-base-content/50">{{ node }} · incoming</div>
+        </div>
+      </div>
+      <div id="message-status" class="badge badge-ghost badge-sm">waiting</div>
     </header>
-    <main class="p-4 space-y-4">
-      <div class="alert"><span>This page is intentionally basic for now. It will become the direct person-to-person messaging link to the desktop node.</span></div>
-      <div class="chat chat-start"><div class="chat-header text-xs text-base-content/50">Desktop</div><div class="chat-bubble">Messages will appear here.</div></div>
-      <div class="join w-full pt-4"><input class="input input-bordered join-item flex-1" placeholder="Message…" disabled><button class="btn btn-primary join-item" disabled>Send</button></div>
+
+    <main id="message-list" class="p-4 space-y-3">
+      <div id="empty-state" class="text-center text-sm text-base-content/50 py-10">
+        Waiting for messages from another CharacterIF node…
+      </div>
     </main>
   </div>
-  <nav class="dock border-t border-base-300 bg-base-100 z-30">
+
+  <nav id="normal-dock" class="dock border-t border-base-300 bg-base-100 z-30">
     <a href="{{ url_for('mobile_home') }}" aria-label="Home">
-      <svg class="size-[1.2em]" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="currentColor" stroke-linejoin="miter" stroke-linecap="butt"><polyline points="1 11 12 2 23 11" fill="none" stroke="currentColor" stroke-miterlimit="10" stroke-width="2"></polyline><path d="m5,13v7c0,1.105.895,2,2,2h10c1.105,0,2-.895,2-2v-7" fill="none" stroke="currentColor" stroke-linecap="square" stroke-miterlimit="10" stroke-width="2"></path><line x1="12" y1="22" x2="12" y2="18" fill="none" stroke="currentColor" stroke-linecap="square" stroke-miterlimit="10" stroke-width="2"></line></g></svg><span class="dock-label">Home</span></a>
+      <svg class="size-[1.2em]" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="currentColor" stroke-linejoin="miter" stroke-linecap="butt"><polyline points="1 11 12 2 23 11" fill="none" stroke="currentColor" stroke-miterlimit="10" stroke-width="2"></polyline><path d="m5,13v7c0,1.105.895,2,2,2h10c1.105,0,2-.895,2-2v-7" fill="none" stroke="currentColor" stroke-linecap="square" stroke-miterlimit="10" stroke-width="2"></path><line x1="12" y1="22" x2="12" y2="18" fill="none" stroke="currentColor" stroke-linecap="square" stroke-miterlimit="10" stroke-width="2"></line></g></svg><span class="dock-label">Home</span>
+    </a>
     <a class="dock-active" href="{{ url_for('mobile_messages') }}" aria-label="Messages">
-      <svg class="size-[1.2em]" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="currentColor" stroke-linejoin="miter" stroke-linecap="butt"><polyline points="3 14 9 14 9 17 15 17 15 14 21 14" fill="none" stroke="currentColor" stroke-miterlimit="10" stroke-width="2"></polyline><rect x="3" y="3" width="18" height="18" rx="2" ry="2" fill="none" stroke="currentColor" stroke-linecap="square" stroke-miterlimit="10" stroke-width="2"></rect></g></svg><span class="dock-label">Messages</span></a>
+      <svg class="size-[1.2em]" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="currentColor" stroke-linejoin="miter" stroke-linecap="butt"><polyline points="3 14 9 14 9 17 15 17 15 14 21 14" fill="none" stroke="currentColor" stroke-miterlimit="10" stroke-width="2"></polyline><rect x="3" y="3" width="18" height="18" rx="2" ry="2" fill="none" stroke="currentColor" stroke-linecap="square" stroke-miterlimit="10" stroke-width="2"></rect></g></svg><span class="dock-label">Messages</span>
+    </a>
     <a href="{{ url_for('mobile_settings') }}" aria-label="Settings"><span class="text-xl">⚙</span><span class="dock-label">Settings</span></a>
   </nav>
+
+  <nav id="request-dock" class="dock border-t border-base-300 bg-base-100 z-30 hidden"></nav>
+
+<script>
+const messageList = document.getElementById('message-list');
+const messageStatus = document.getElementById('message-status');
+const pageTitle = document.getElementById('page-title');
+const pageSubtitle = document.getElementById('page-subtitle');
+const normalDock = document.getElementById('normal-dock');
+const requestDock = document.getElementById('request-dock');
+let lastSnapshot = '';
+
+function requestId(message) {
+  return message.request_id || message['request-id'] || message.id || '';
+}
+
+function messageIdentity(message) {
+  return [
+    message.time || message.received_time || '',
+    message.type || '',
+    requestId(message),
+    message.from_node || '',
+    message.from_character || message.from_ai || '',
+    message.text || '',
+    JSON.stringify(message.responses || [])
+  ].join('\u001f');
+}
+
+function responseForRequest(items, request) {
+  const id = requestId(request);
+  if (!id) return null;
+  return items.find(message =>
+    message.type === 'response' &&
+    (message.request_id || message['request-id'] || '') === id
+  ) || null;
+}
+
+function normaliseResponses(request) {
+  const supplied = Array.isArray(request.responses) ? request.responses : [];
+  return supplied.map((item, index) => {
+    if (typeof item === 'string') return {id: item, caption: item};
+    if (!item || typeof item !== 'object') return null;
+    const id = String(item.id || item.action || `response-${index + 1}`);
+    return {id, caption: String(item.caption || item.text || item.label || id)};
+  }).filter(Boolean);
+}
+
+function showNormalDock() {
+  requestDock.classList.add('hidden');
+  normalDock.classList.remove('hidden');
+}
+
+function showRequestDock(request) {
+  normalDock.classList.add('hidden');
+  requestDock.classList.remove('hidden');
+  requestDock.innerHTML = '';
+
+  const home = document.createElement('a');
+  home.href = `{{ url_for('mobile_home') }}`;
+  home.setAttribute('aria-label', 'Home');
+  home.innerHTML = '<span class="text-xl">⌂</span><span class="dock-label">Home</span>';
+  requestDock.appendChild(home);
+
+  normaliseResponses(request).forEach(response => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.dataset.action = response.id;
+    button.innerHTML = `<span class="text-xl">●</span><span class="dock-label"></span>`;
+    button.querySelector('.dock-label').textContent = response.caption;
+    button.addEventListener('click', () => sendResponse(request, response, button));
+    requestDock.appendChild(button);
+  });
+}
+
+function collectRequestFields() {
+  const values = {};
+  messageList.querySelectorAll('[data-request-field]').forEach(input => {
+    values[input.dataset.requestField] = input.value;
+  });
+  return values;
+}
+
+function fillCurrentLocation(button, input) {
+  if (!navigator.geolocation) {
+    alert('Location is not available in this browser.');
+    return;
+  }
+  button.disabled = true;
+  button.textContent = 'Getting location…';
+  navigator.geolocation.getCurrentPosition(
+    position => {
+      input.value = `${position.coords.latitude},${position.coords.longitude}`;
+      button.disabled = false;
+      button.textContent = 'Use current location';
+    },
+    error => {
+      alert(`Could not get location: ${error.message}`);
+      button.disabled = false;
+      button.textContent = 'Use current location';
+    },
+    {enableHighAccuracy: true, timeout: 10000}
+  );
+}
+
+async function sendResponse(request, response, button) {
+  const id = requestId(request);
+  requestDock.querySelectorAll('button').forEach(item => item.disabled = true);
+  messageStatus.textContent = 'sending';
+
+  const body = {
+    protocol: 'characterif/1',
+    type: 'response',
+    request_id: id,
+    action: response.id,
+    text: response.caption,
+    from_node: {{ node|tojson }},
+    from_character: request.to_character || request.to_ai || 'user',
+    to_node: request.from_node || '',
+    to_character: request.from_character || request.from_ai || 'user',
+    values: collectRequestFields()
+  };
+
+  try {
+    const result = await fetch('/api/chat-text', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body)
+    });
+    const data = await result.json();
+    if (!result.ok || !data.ok) throw new Error(data.error || `HTTP ${result.status}`);
+    messageStatus.textContent = response.caption;
+    lastSnapshot = '';
+    await pollMessages();
+  } catch (error) {
+    messageStatus.textContent = 'failed';
+    requestDock.querySelectorAll('button').forEach(item => item.disabled = false);
+    alert(`Could not send response: ${error.message}`);
+  }
+}
+
+function renderRequest(request, answered) {
+  messageList.innerHTML = '';
+  pageTitle.textContent = request.title || 'Request';
+  const sender = request.from_character || request.from_ai || 'unknown';
+  const node = request.from_node ? ` · ${request.from_node}` : '';
+  pageSubtitle.textContent = `${sender}${node}`;
+
+  const article = document.createElement('article');
+  article.className = 'prose prose-invert max-w-none';
+
+  if (request.title) {
+    const heading = document.createElement('h1');
+    heading.className = 'text-2xl font-bold mb-5';
+    heading.textContent = request.title;
+    article.appendChild(heading);
+  }
+
+  const body = document.createElement('div');
+  body.className = 'whitespace-pre-wrap break-words text-base leading-relaxed';
+  body.textContent = request.text || '';
+  article.appendChild(body);
+
+  const suppliedFields = Array.isArray(request.fields) ? request.fields : [];
+  if (suppliedFields.length) {
+    const form = document.createElement('div');
+    form.className = 'not-prose mt-6 space-y-5';
+
+    suppliedFields.forEach(field => {
+      if (!field || typeof field !== 'object' || !field.id) return;
+      const group = document.createElement('div');
+      group.className = 'form-control';
+      const label = document.createElement('label');
+      label.className = 'label';
+      const labelText = document.createElement('span');
+      labelText.className = 'label-text font-medium';
+      labelText.textContent = field.label || field.id;
+      label.appendChild(labelText);
+      group.appendChild(label);
+
+      let input;
+      if (field.type === 'choice') {
+        input = document.createElement('select');
+        input.className = 'select select-bordered w-full';
+        (Array.isArray(field.choices) ? field.choices : []).forEach(choice => {
+          const option = document.createElement('option');
+          if (choice && typeof choice === 'object') {
+            option.value = String(choice.value ?? choice.id ?? choice.label ?? '');
+            option.textContent = String(choice.label ?? choice.caption ?? option.value);
+          } else {
+            option.value = String(choice);
+            option.textContent = String(choice);
+          }
+          input.appendChild(option);
+        });
+      } else {
+        input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'input input-bordered w-full';
+        input.placeholder = field.placeholder || '';
+      }
+      input.dataset.requestField = String(field.id);
+      if (field.value != null) input.value = String(field.value);
+      group.appendChild(input);
+
+      if (field.type === 'location') {
+        const locate = document.createElement('button');
+        locate.type = 'button';
+        locate.className = 'btn btn-outline btn-sm mt-2';
+        locate.textContent = 'Use current location';
+        locate.addEventListener('click', () => fillCurrentLocation(locate, input));
+        group.appendChild(locate);
+      }
+      form.appendChild(group);
+    });
+    article.appendChild(form);
+  }
+
+  if (answered) {
+    const notice = document.createElement('div');
+    notice.className = 'alert alert-success mt-6';
+    notice.textContent = `Response: ${answered.action || answered.text || 'sent'}`;
+    article.appendChild(notice);
+  }
+
+  messageList.appendChild(article);
+  messageStatus.textContent = answered ? 'answered' : 'response required';
+  if (answered) showNormalDock();
+  else showRequestDock(request);
+}
+
+function renderMessages(items) {
+  const snapshot = items.map(messageIdentity).join('\u001e');
+  if (snapshot === lastSnapshot) return;
+  lastSnapshot = snapshot;
+
+  const requests = items.filter(message => message.type === 'request');
+  const activeRequest = [...requests].reverse().find(request => !responseForRequest(items, request));
+  if (activeRequest) {
+    renderRequest(activeRequest, null);
+    return;
+  }
+
+  pageTitle.textContent = 'Messages';
+  pageSubtitle.textContent = `{{ node }} · incoming`;
+  showNormalDock();
+  messageList.innerHTML = '';
+
+  if (items.length === 0) {
+    messageList.innerHTML = '<div class="text-center text-sm text-base-content/50 py-10">Waiting for messages from another CharacterIF node…</div>';
+    messageStatus.textContent = 'waiting';
+    return;
+  }
+
+  items.forEach(message => {
+    const row = document.createElement('div');
+    row.className = 'chat chat-start';
+
+    const header = document.createElement('div');
+    header.className = 'chat-header text-xs text-base-content/50 mb-1';
+    const sender = message.from_character || message.from_ai || 'unknown';
+    const node = message.from_node ? ` · ${message.from_node}` : '';
+    header.textContent = `${sender}${node}`;
+
+    const bubble = document.createElement('div');
+    bubble.className = 'chat-bubble whitespace-pre-wrap break-words max-w-[90%]';
+    bubble.textContent = message.text || '';
+
+    const footer = document.createElement('div');
+    footer.className = 'chat-footer text-[11px] text-base-content/40 mt-1';
+    footer.textContent = message.type || 'chat-text';
+
+    row.appendChild(header);
+    row.appendChild(bubble);
+    row.appendChild(footer);
+    messageList.appendChild(row);
+  });
+
+  messageStatus.textContent = `${items.length} message${items.length === 1 ? '' : 's'}`;
+  window.scrollTo({top: document.body.scrollHeight, behavior: 'smooth'});
+}
+
+async function pollMessages() {
+  try {
+    const response = await fetch('/api/chat/recent?limit=100', {cache: 'no-store'});
+    const data = await response.json();
+    if (!response.ok || !data.ok || !Array.isArray(data.messages)) {
+      throw new Error(data.error || `HTTP ${response.status}`);
+    }
+    renderMessages(data.messages);
+    messageStatus.classList.remove('badge-error');
+    messageStatus.classList.add('badge-ghost');
+  } catch (error) {
+    messageStatus.textContent = 'offline';
+    messageStatus.classList.remove('badge-ghost');
+    messageStatus.classList.add('badge-error');
+  }
+}
+
+pollMessages();
+setInterval(pollMessages, 1500);
+</script>
 </body>
 </html>
 """
@@ -1946,6 +2261,67 @@ def make_app() -> "Flask":
             "peer": mine,
         })
 
+    def run_response_plugin(body: Dict[str, Any]) -> None:
+        """Run the locally approved plugin for an incoming response document.
+
+        Plugins are opt-in through [plugins] in characterif.conf.  The network
+        document never supplies a filename or command.  Missing/invalid config
+        simply means that no plugin is run.
+        """
+        if body.get("type") != "response":
+            return
+
+        plugin_name = cfg_get(cfg, "plugins", "response")
+        if not plugin_name:
+            return
+
+        # "directory" is reserved configuration metadata, never a plugin name.
+        if plugin_name.strip().lower() == "directory":
+            print("\nPLUGIN skipped: 'directory' is reserved")
+            return
+
+        # Plugins are deliberately restricted to plain Python filenames.
+        # No paths, arguments, or shell syntax are accepted from plugin entries.
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+\.py", plugin_name):
+            print(f"\nPLUGIN skipped: invalid configured filename: {plugin_name!r}")
+            return
+
+        configured_dir = cfg_get(cfg, "plugins", "directory")
+        if configured_dir:
+            plugins_dir = Path(configured_dir).expanduser()
+            if not plugins_dir.is_absolute():
+                plugins_dir = BASE_DIR / plugins_dir
+        else:
+            # Preserve the old location when no directory is configured.
+            plugins_dir = Path(__file__).resolve().parent / "plugins"
+        plugin_path = (plugins_dir / plugin_name).resolve()
+        try:
+            plugin_path.relative_to(plugins_dir.resolve())
+        except ValueError:
+            print("\nPLUGIN skipped: configured plugin is outside plugins directory")
+            return
+
+        if not plugin_path.is_file():
+            print(f"\nPLUGIN skipped: not found: {plugin_path}")
+            return
+
+        try:
+            result = subprocess.run(
+                [sys.executable, str(plugin_path)],
+                input=json.dumps(body),
+                text=True,
+                capture_output=True,
+                timeout=DEFAULT_TIMEOUT,
+                check=False,
+            )
+            print(f"\nPLUGIN {plugin_name}: exit {result.returncode}")
+            if result.stdout.strip():
+                print(result.stdout.rstrip())
+            if result.stderr.strip():
+                print(result.stderr.rstrip(), file=sys.stderr)
+        except Exception as exc:
+            print(f"\nPLUGIN {plugin_name} failed: {exc}", file=sys.stderr)
+
     @app.post("/api/chat-text")
     def api_chat_text():
         body = flask_request.get_json(silent=True) or {}
@@ -1967,6 +2343,10 @@ def make_app() -> "Flask":
         remembered.setdefault("to_node", target_node)
         remembered.setdefault("to_character", target_character)
         remember_chat_message(remembered)
+
+        # A response document may trigger one explicitly approved local plugin.
+        # Ordinary chat/request messages never execute plugins.
+        run_response_plugin(remembered)
 
         print("\nCHAT")
         print(f"  from node:      {sender_node}")
