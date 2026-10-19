@@ -255,6 +255,34 @@ def ensure_tags(path, tags):
         handle.write("\n")
 
 
+def mark_story_completed(path):
+    """Set status in existing YAML front matter, preserving other metadata."""
+    path = Path(path)
+    if path.name != "story.md":
+        return
+
+    content = path.read_text(encoding="utf-8")
+    lines = content.splitlines(keepends=True)
+    if not lines or lines[0].strip() != "---":
+        return  # Do not invent front matter for legacy documents.
+
+    for end in range(1, len(lines)):
+        if lines[end].strip() == "---":
+            break
+    else:
+        return
+
+    for i in range(1, end):
+        if lines[i].split(":", 1)[0].strip() == "status":
+            newline = "\r\n" if lines[i].endswith("\r\n") else "\n"
+            lines[i] = "status: Completed" + newline
+            break
+    else:
+        lines.insert(end, "status: Completed\n")
+
+    path.write_text("".join(lines), encoding="utf-8")
+
+
 def append_story(path, text):
     path = str(path)
     parent = os.path.dirname(path)
@@ -477,6 +505,7 @@ def main():
     for story_path in selected_story_paths:
         ensure_tags(story_path, settings.default_tags)
         append_story(story_path, rendered)
+        mark_story_completed(story_path)
 
     if args.image:
         import_image(args.image, target_dir, settings.image_mode)
