@@ -355,6 +355,13 @@
         </div>
       </label>
 
+      <div id="ollama-model-panel" class="ml-10 mt-2 hidden">
+        <label for="ollama-model-select" class="block text-sm mb-2">Ollama model</label>
+        <select id="ollama-model-select" name="model" class="select select-bordered w-full">
+          <option value="">Checking installed models...</option>
+        </select>
+      </div>
+
       <div class="modal-action">
 
         <button
@@ -383,61 +390,56 @@
 <script>
 const sceneFrame = document.getElementById("remote-view-scene-frame");
 
+const configuredRvModel = {{ remote_view_model|tojson }};
+
+function toggleOllamaModels() {
+    const live = document.getElementById("ollama-backend-radio");
+    const panel = document.getElementById("ollama-model-panel");
+    const select = document.getElementById("ollama-model-select");
+    const enabled = live.checked && !live.disabled;
+    panel.classList.toggle("hidden", !enabled);
+    select.disabled = !enabled;
+}
+
 async function updateLlmStatus() {
     const radio = document.getElementById("ollama-backend-radio");
     const label = document.getElementById("ollama-backend-label");
     const message = document.getElementById("ollama-backend-status");
-
+    const select = document.getElementById("ollama-model-select");
     try {
         const response = await fetch("/api/llm-status");
+        if (!response.ok) throw new Error("Status request failed");
         const status = await response.json();
-
-        const configured = String(status.model || "").toLowerCase();
-
-        const modelAvailable = (status.models || []).some(name => {
-            const installed = String(name || "").toLowerCase();
-
-            return (
-                installed === configured ||
-                installed.split(":")[0] === configured
-            );
-        });
-
-        const available =
-            status.installed &&
-            status.running &&
-            modelAvailable;
-
-        radio.disabled = !available;
-
-        if (available) {
-            label.classList.remove(
-                "cursor-not-allowed",
-                "opacity-45"
-            );
-            label.classList.add(
-                "cursor-pointer",
-                "hover:bg-base-200"
-            );
-
-            message.textContent =
-                `Live AI remote-viewing engine — ${status.model} ready.`;
-        } else {
-            label.classList.add(
-                "cursor-not-allowed",
-                "opacity-45"
-            );
-
-            message.textContent =
-                "LLM System not available. Install or configure Ollama and the Custom Heichalot.tech Remote-Viewing LLM.";
+        const models = Array.isArray(status.models) ? status.models : [];
+        select.replaceChildren();
+        for (const name of models) {
+            const option = new Option(name, name);
+            select.add(option);
         }
-
+        const available = Boolean(status.installed && status.running && models.length);
+        radio.disabled = !available;
+        const preferred = configuredRvModel || status.model || "";
+        if (models.includes(preferred)) select.value = preferred;
+        if (!available && radio.checked) {
+            document.querySelector('input[name="backend"][value="mock"]').checked = true;
+        }
+        label.classList.toggle("opacity-45", !available);
+        message.textContent = available
+            ? `${models.length} installed Ollama model(s) available.`
+            : "Ollama is unavailable or no models are installed.";
     } catch (error) {
         radio.disabled = true;
-        message.textContent =
-            "Unable to determine local LLM status.";
+        if (radio.checked) document.querySelector('input[name="backend"][value="mock"]').checked = true;
+        select.replaceChildren();
+        message.textContent = "Unable to determine local LLM status.";
     }
+    toggleOllamaModels();
 }
+
+document.querySelectorAll('input[name="backend"]').forEach(radio => {
+    radio.addEventListener("change", toggleOllamaModels);
+});
+updateLlmStatus();
 
 function sendSceneCommand(command, value = null) {
     if (!sceneFrame || !sceneFrame.contentWindow) {
