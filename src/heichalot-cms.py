@@ -21,6 +21,9 @@ import base64
 import sys
 
 
+
+
+
 from flask import (
     Flask,
     abort,
@@ -1629,6 +1632,9 @@ def remote_view():
         remote_view_status=status,
         remote_view_backend=backend,
         remote_view_models=[],
+        remote_view_model=user_config_parser(current_user()).get(
+            "remoteviewing", "model", fallback=""
+        ),
     )
  
 @app.route("/remote-view/backend", methods=["POST"])
@@ -1645,6 +1651,15 @@ def remote_view_backend():
 
     if not cfg.has_section("remoteviewing"):
         cfg.add_section("remoteviewing")
+
+    if selected == "ollama":
+        model = request.form.get("model", "").strip()
+        llm = detect_llm_system()
+        if not (llm["installed"] and llm["service_running"]):
+            abort(400, "Ollama is unavailable")
+        if model not in llm["models"]:
+            abort(400, "The selected Ollama model is not installed")
+        cfg.set("remoteviewing", "model", model)
 
     cfg.set("remoteviewing", "api", selected)
 
