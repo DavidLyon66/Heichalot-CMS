@@ -13,6 +13,9 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
+import socket
+from datetime import datetime, timezone
 import re
 import sys
 from pathlib import Path
@@ -44,6 +47,52 @@ def read_entry_id(story_text: str) -> str:
     raise ValueError("story.md has no entry_id")
 
 
+
+def write_transfer_records(entry_dir: Path, old_id: str, new_id: str,
+                           repository_ip: str, port: int) -> None:
+    """Keep machine-local transfer history and a publish.json marker."""
+    timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    event = {
+        "datetime": timestamp,
+        "text": "Entry transferred to repository",
+        "original_entry_id": old_id,
+        "entry_id": new_id,
+        "source_node": socket.gethostname(),
+        "repository": f"{repository_ip}:{port}",
+    }
+
+    private_dir = entry_dir / "private"
+    private_dir.mkdir(parents=True, exist_ok=True)
+    history_path = private_dir / "transfer-history.json"
+    if history_path.exists():
+        history = json.loads(history_path.read_text(encoding="utf-8"))
+        if not isinstance(history, list):
+            raise ValueError(f"Expected JSON list in {history_path}")
+    else:
+        history = []
+    history.append(event)
+    history_path.write_text(
+        json.dumps(history, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+
+    # Match publishentry.py's publish.json structure without publishing.
+    publish_path = entry_dir / "publish.json"
+    if publish_path.exists():
+        publish = json.loads(publish_path.read_text(encoding="utf-8"))
+        if not isinstance(publish, dict):
+            raise ValueError(f"Expected JSON object in {publish_path}")
+    else:
+        publish = {"free": True, "members": True, "premium": True}
+    log = publish.get("log", [])
+    if not isinstance(log, list):
+        log = []
+    log.append(event.copy())
+    publish["log"] = log
+    publish_path.write_text(
+        json.dumps(publish, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+
+
 def transfer_story(
     repository_ip: str,
     entry_dir: Path,
@@ -71,7 +120,11 @@ def transfer_story(
 
     response = requests.post(
         url,
-        json={"story": story_text},
+        json={
+            "story": story_text,
+            "source_node": socket.gethostname(),
+            "source_directory": str(entry_dir),
+        },
         timeout=30,
     )
 
@@ -114,6 +167,8 @@ def transfer_story(
     # Rename the local entry directory.
     if new_dir != entry_dir:
         entry_dir.rename(new_dir)
+
+    write_transfer_records(new_dir, old_id, new_id, repository_ip, port)
 
     print()
     print("Transfer successful.")

@@ -31,7 +31,7 @@ v0.3a also reserves/implements simple display-facing API entry-points for AI ide
 standard representation, location manifest, and recent chat. These are deliberately
 minimal so their internals can be replaced later without changing the URLs.
 
-This is an internal prototype. The Flask API binds to loopback by default.
+This is an internal prototype. The Flask API binds to the LAN by default.
 Do not expose it directly to an untrusted network without authentication.
 """
 
@@ -72,7 +72,7 @@ except ImportError:
 APP_NAME = "characterif"
 PROTOCOL = "characterif/1"
 API_VERSION = 1
-DEFAULT_BIND = "127.0.0.1"
+DEFAULT_BIND = "0.0.0.0"
 DEFAULT_PORT = 8765
 DEFAULT_TIMEOUT = 15
 
@@ -2020,6 +2020,96 @@ def make_app() -> "Flask":
             "tailcat_address": CURRENT_TAILCAT_ADDRESS,
             "time": utcnow(),
         })
+
+    @app.post("/api/cms/transfer")
+    def api_cms_transfer():
+        """Receive story.md text and allocate a new CMS entry on this repository."""
+        if cfg_get(cfg, "characterif", "role", "workstation") != "domain-repository":
+            return jsonify({"ok": False, "error": "This node is not a domain-repository"}), 403
+
+        payload = flask_request.get_json(silent=True)
+        if not isinstance(payload, dict) or not isinstance(payload.get("story"), str):
+            return jsonify({"ok": False, "error": "Expected JSON with a story string"}), 400
+
+        story = payload["story"]
+        if not story.startswith("---\n") or len(story.encode("utf-8")) > 5_000_000:
+            return jsonify({"ok": False, "error": "Invalid or oversized story.md"}), 400
+
+        try:
+            import yaml
+            from createentry import create_entry, set_yaml_field
+
+            parts = story.split("\n---", 1)
+            if len(parts) != 2:
+                raise ValueError("Missing closing YAML frontmatter delimiter")
+            metadata = yaml.safe_load(parts[0][4:])
+            if not isinstance(metadata, dict):
+                raise ValueError("Invalid YAML frontmatter")
+            original_id = str(metadata.get("entry_id") or "").strip()
+            if not re.fullmatch(r"[A-Za-z0-9_-]+", original_id):
+                raise ValueError("Missing or invalid entry_id")
+            entry_type = str(metadata.get("entry_type") or "n").strip()
+            if not re.fullmatch(r"[A-Za-z0-9_-]+", entry_type):
+                raise ValueError("Invalid entry_type")
+            title = str(metadata.get("title") or "Transferred story")
+        except (ValueError, ImportError, yaml.YAMLError) as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+
+        try:
+            new_id, entry_dir, story_path = create_entry(entry_type, title=title)
+            # Keep the submitted story intact except for its repository entry ID.
+            story_path.write_text(story, encoding="utf-8")
+            set_yaml_field(story_path, "entry_id", new_id)
+
+            # Preserve where this received entry came from on the repository.
+            source_node = str(payload.get("source_node") or "").strip() or None
+            source_directory = str(payload.get("source_directory") or "").strip() or None
+            source_address = flask_request.remote_addr
+            event = {
+                "datetime": utcnow(),
+                "text": "Entry received from workstation",
+                "original_entry_id": original_id,
+                "entry_id": new_id,
+                "source_node": source_node,
+                "source_directory": source_directory,
+                "source_address": source_address,
+                "repository_node": local_node_name(cfg),
+            }
+            private_dir = entry_dir / "private"
+            private_dir.mkdir(parents=True, exist_ok=True)
+            history_path = private_dir / "transfer-history.json"
+            history = []
+            if history_path.exists():
+                history = json.loads(history_path.read_text(encoding="utf-8"))
+                if not isinstance(history, list):
+                    raise ValueError(f"Expected JSON list in {history_path}")
+            history.append(event)
+            history_path.write_text(json.dumps(history, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+            publish_path = entry_dir / "publish.json"
+            if publish_path.exists():
+                publish = json.loads(publish_path.read_text(encoding="utf-8"))
+                if not isinstance(publish, dict):
+                    raise ValueError(f"Expected JSON object in {publish_path}")
+            else:
+                publish = {"free": True, "members": True, "premium": True}
+            log = publish.get("log", [])
+            if not isinstance(log, list):
+                log = []
+            log.append(dict(event))
+            publish["log"] = log
+            publish_path.write_text(json.dumps(publish, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        except Exception as exc:
+            app.logger.exception("CMS transfer failed")
+            return jsonify({"ok": False, "error": str(exc)}), 500
+
+        return jsonify({
+            "ok": True,
+            "original_entry_id": original_id,
+            "entry_id": new_id,
+            "repository_node": local_node_name(cfg),
+            "source_status": "Transferred",
+        }), 201
 
     # --- Character / AI display API --------------------------------------
 
