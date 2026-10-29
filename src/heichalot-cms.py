@@ -1029,7 +1029,7 @@ def index():
             SELECT entry_id, title, stream_name, yaml_header, tags,
                    access_level, location, published_utc
             FROM entries
-            ORDER BY created_at DESC, entry_id DESC
+            ORDER BY created_utc DESC, entry_id DESC
             """
         ).fetchall()
 
