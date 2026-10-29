@@ -2413,15 +2413,85 @@ def make_app() -> "Flask":
     return app
 
 
+# Minimal LAN service discovery. Independent of Tailcat and MQTT.
+ZEROCONF_SERVICE = "_characterif._tcp.local."
+
+
+def advertise_lan(cfg, port):
+    from zeroconf import Zeroconf, ServiceInfo
+
+    node = local_node_name(cfg)
+    role = cfg_get(cfg, "characterif", "role", "workstation").strip()
+    # Determine the outbound LAN address without sending any packets.
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.connect(("192.0.2.1", 9))
+        ip = sock.getsockname()[0]
+    if ip.startswith("127."):
+        raise RuntimeError("No usable LAN IPv4 address")
+
+    zc = Zeroconf()
+    info = ServiceInfo(
+        ZEROCONF_SERVICE,
+        f"{node}.{ZEROCONF_SERVICE}",
+        addresses=[socket.inet_aton(ip)],
+        port=port,
+        properties={"node": node, "role": role},
+        server=f"{socket.gethostname().split('.')[0]}.local.",
+    )
+    try:
+        zc.register_service(info)
+    except Exception:
+        zc.close()
+        raise
+    print(f"CharacterIF Zeroconf: {node} ({role}) at {ip}:{port}")
+    return zc, info
+
+
+def discover_lan(seconds=3):
+    from zeroconf import Zeroconf, ServiceBrowser, ServiceListener
+
+    found = {}
+    class Listener(ServiceListener):
+        def add_service(self, zc, service_type, name):
+            info = zc.get_service_info(service_type, name)
+            if info:
+                props = {k.decode('utf-8'): v.decode('utf-8')
+                         for k, v in info.properties.items()}
+                found[name] = {
+                    "node": props.get("node", name.split('.')[0]),
+                    "role": props.get("role", "workstation"),
+                    "address": info.parsed_addresses()[0] if info.parsed_addresses() else "",
+                    "port": info.port,
+                }
+        def update_service(self, zc, service_type, name):
+            self.add_service(zc, service_type, name)
+        def remove_service(self, zc, service_type, name):
+            found.pop(name, None)
+
+    zc = Zeroconf()
+    try:
+        browser = ServiceBrowser(zc, ZEROCONF_SERVICE, Listener())
+        time.sleep(seconds)
+        browser.cancel()
+        return sorted(found.values(), key=lambda n: n["node"])
+    finally:
+        zc.close()
+
+
 def run_flask(cfg: configparser.ConfigParser, bind=None, port=None) -> int:
     bind = bind or character_cfg_get(cfg, "api_host", DEFAULT_BIND)
     port = port or api_port(cfg)
 
+    zc, service = advertise_lan(cfg, port)
     app = make_app()
     print(f"\n{APP_NAME}: node={local_node_name(cfg)}")
     print(f"{APP_NAME}: api=http://{bind}:{port}")
     print(f"{APP_NAME}: registry={REGISTRY_CACHE}")
-    app.run(host=bind, port=port, threaded=True, use_reloader=False)
+    try:
+        app.run(host=bind, port=port, threaded=True, use_reloader=False)
+    finally:
+        zc.unregister_service(service)
+        zc.close()
     return 0
 
 
@@ -2446,8 +2516,13 @@ def run_mobile_web(cfg: configparser.ConfigParser, bind: Optional[str] = None,
         local_url = f"http://127.0.0.1:{port}/mobile"
         threading.Timer(0.7, lambda: webbrowser.open(local_url)).start()
 
+    zc, service = advertise_lan(cfg, port)
     app = make_app()
-    app.run(host=bind, port=port, threaded=True, use_reloader=False)
+    try:
+        app.run(host=bind, port=port, threaded=True, use_reloader=False)
+    finally:
+        zc.unregister_service(service)
+        zc.close()
     return 0
 
 
@@ -2883,6 +2958,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("status", help="show running daemon status")
     sub.add_parser("nodes", help="list locally known peers")
+    sub.add_parser("discover", help="discover running CharacterIF nodes on the LAN")
+    p.add_argument("--find-repository", action="store_true", help="find the LAN domain repository (JSON)")
 
     s = sub.add_parser("sync-characters", help="fetch and cache characters from a known peer")
     s.add_argument("node")
@@ -2946,13 +3023,25 @@ def main() -> int:
         print(json.dumps(character_statuses(), indent=2, sort_keys=True))
         return 0
 
-    if not args.command:
+    if not args.command and not args.find_repository:
         parser.print_help()
         return 2
 
     cfg = load_config()
 
     try:
+        if args.find_repository or args.command == "discover":
+            nodes = discover_lan()
+            if args.find_repository:
+                matches = [n for n in nodes if n["role"] == "domain-repository"]
+                if len(matches) != 1:
+                    print(json.dumps({"ok": False, "error": f"Expected one repository, found {len(matches)}", "repositories": matches}, indent=2))
+                    return 1
+                print(json.dumps(matches[0], indent=2))
+            else:
+                print(json.dumps(nodes, indent=2))
+            return 0
+
         if args.command == "start":
             return cmd_start(args)
 
