@@ -1,7 +1,6 @@
 flask>=3.0
 pywebview[qt]>=4.0
 PyYAML>=6.0
-pyyaml
 rich>=13.0
 PyQt5>=5.15; sys_platform != 'win32'
 PyQtWebEngine>=5.15; sys_platform != 'win32'
@@ -14,7 +13,6 @@ reportlab
 python-bidi
 send2trash
 notify-py
-requests
 zeroconf
 # Heavy numerical deps only required by the rvcrypto analysis tools.
 numpy
