@@ -51,7 +51,6 @@ import sys
 import threading
 import time
 import webbrowser
-import pyaml
 from datetime import datetime, timezone
 from multiprocessing import shared_memory
 from pathlib import Path
