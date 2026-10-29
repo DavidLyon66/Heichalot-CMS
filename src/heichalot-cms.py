@@ -1029,7 +1029,7 @@ def index():
             SELECT entry_id, title, stream_name, yaml_header, tags,
                    access_level, location, published_utc
             FROM entries
-            ORDER BY published_utc DESC, entry_id DESC
+            ORDER BY created_at DESC, entry_id DESC
             """
         ).fetchall()
 
@@ -1633,7 +1633,7 @@ def remote_view():
         remote_view_backend=backend,
         remote_view_models=[],
         remote_view_model=user_config_parser(current_user()).get(
-            "remoteviewing", "model", fallback=""
+            "ollama-interface", "model", fallback=""
         ),
     )
  
@@ -1649,8 +1649,8 @@ def remote_view_backend():
         setup_if_missing=True,
     )
 
-    if not cfg.has_section("remoteviewing"):
-        cfg.add_section("remoteviewing")
+    if not cfg.has_section("ollama-interface"):
+        cfg.add_section("ollama-interface")
 
     if selected == "ollama":
         model = request.form.get("model", "").strip()
@@ -1661,7 +1661,7 @@ def remote_view_backend():
             abort(400, "The selected Ollama model is not installed")
         cfg.set("remoteviewing", "model", model)
 
-    cfg.set("remoteviewing", "api", selected)
+    cfg.set("ollama-interface", "model", model)
 
     with config_path.open("w", encoding="utf-8") as handle:
         cfg.write(handle)
