@@ -37,7 +37,7 @@ Heichalot takes a different approach:
 - minimal configuration
 - simple Python CLI tools
 - optional Blender modeling
-- output to PDF, HTML, and video (Remotion)
+- output to PDF, HTML
 
 This allows a reconstruction to be built quickly while still preserving enough structure for later verification.
 
@@ -80,7 +80,7 @@ python3 tools/config.py --setup
 
 The config setup will prompt for your CMS content directory (default: `~/Documents/heichalot-cms/cms`).
 
-### Ollama Ofline Ai Remote Viewing (optional)
+### Ollama Ofline Ai Remote Viewing
 
 ```bash
 ollama pull gemma3
@@ -103,7 +103,6 @@ python3 src/heichalot-cms.py
 Heichalot-CMS/
   tools/              # Python CLI tools (package)
   tests/              # pytest test suite
-  videorender/        # Remotion video rendering project
   sphinx/             # Documentation
   images/             # Project assets
   cms/                # (optional) local sample entries
