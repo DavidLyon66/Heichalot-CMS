@@ -46,6 +46,14 @@ CONFIG_TEMPLATE_NAME = "config.ini.j2"
 
 CONFIG_DIR = Path(__file__).resolve().parent
 
+# PyInstaller: this module is imported from the bundle root (_MEIPASS/config.py)
+# while the tools package, including its templates, is bundled under
+# _MEIPASS/tools.  Point CONFIG_DIR at the bundled tools directory so that
+# template_dir() resolves to an existing folder in a frozen build.
+if getattr(sys, "frozen", False):
+    _MEIPASS = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+    CONFIG_DIR = _MEIPASS / "tools"
+
 _PATH_MAP = {
     "cms": "cms_dir",
     "data": "data_dir",
@@ -166,7 +174,16 @@ def find_application_program(project_root: str | Path) -> Path | None:
     not discover or record a Python/Conda interpreter here: a user running
     the source form is responsible for having the .py entry point runnable
     on their operating system.
+
+    In a frozen (PyInstaller) build the running executable *is* the
+    application program, so it is used directly instead of searching a
+    directory that only exists for the duration of the process.
     """
+    if getattr(sys, "frozen", False):
+        executable = Path(sys.executable)
+        if executable.is_file():
+            return executable
+
     root = expand_path(project_root)
 
     for name in APP_PROGRAM_CANDIDATES:
@@ -197,11 +214,55 @@ def _find_application_icon(project_root: str | Path) -> Path | None:
         root / "server-side" / "icons" / "heichalotcms.png",
         root / "icons" / "heichalot-cms.png",
         root / "icons" / "heichalotcms.png",
+        root / "src" / "static" / "icons" / "heichalot-cms.png",
+        root / "src" / "static" / "icons" / "heichalot-cms.svg",
         root / "heichalot-cms.png",
     )
 
     for candidate in candidates:
         if candidate.is_file():
+            return candidate
+
+    return None
+
+
+def _find_windows_icon(project_root: str | Path) -> Path | None:
+    """Return the packaged .ico for a source checkout, if present.
+
+    Windows shortcuts expect an .ico (or an executable), not a PNG, so this
+    deliberately looks only for the icon generated for the PyInstaller build.
+    """
+    root = expand_path(project_root)
+    candidates = (
+        root / "packaging" / "heichalot-cms.ico",
+        root / "icons" / "heichalot-cms.ico",
+        root / "heichalot-cms.ico",
+    )
+
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+
+    return None
+
+
+def _find_project_python(project_root: str | Path) -> Path | None:
+    """Return a project-local interpreter created by the install scripts.
+
+    Both ``.venv-linux`` and ``.conda-linux`` are written by
+    ``install_linux.sh``.  A plain ``.venv`` is also accepted so an existing
+    developer environment keeps working.
+    """
+    root = expand_path(project_root)
+    candidates = (
+        root / ".venv-linux" / "bin" / "python",
+        root / ".venv" / "bin" / "python",
+        root / ".conda-linux" / "bin" / "python",
+        root / ".conda" / "bin" / "python",
+    )
+
+    for candidate in candidates:
+        if candidate.is_file() and os.access(candidate, os.X_OK):
             return candidate
 
     return None
@@ -220,16 +281,24 @@ def _desktop_exec_quote(value: str | Path) -> str:
 def create_linux_application_entry(project_root: str | Path) -> Path:
     """Register Heichalot CMS in the current Linux user's application menu.
 
-    Native executables are launched directly.  Source checkouts use the
-    system ``python3`` command to launch ``src/heichalot-cms.py`` so the
-    generated Python file itself does not need to be marked executable.
+    Native executables are launched directly.  Source checkouts are launched
+    with the project-local interpreter created by ``install_linux.sh`` when one
+    exists (``.venv-linux`` or ``.conda-linux``); otherwise the interpreter
+    running this setup is recorded, and finally the system ``python3``.
     """
-    program = _required_application_program(project_root)
-    icon = _find_application_icon(project_root)
+    root = expand_path(project_root)
+    program = _required_application_program(root)
+    icon = _find_application_icon(root)
 
     if program.suffix.lower() == ".py":
-        exec_line = f"python3 {_desktop_exec_quote(program)}"
-        try_exec = "python3"
+        interpreter = _find_project_python(root)
+        if interpreter is None:
+            interpreter = Path(sys.executable) if sys.executable else Path("python3")
+        exec_line = (
+            f"{_desktop_exec_quote(interpreter)} "
+            f"{_desktop_exec_quote(program)}"
+        )
+        try_exec = str(interpreter)
     else:
         exec_line = _desktop_exec_quote(program)
         try_exec = str(program)
@@ -251,6 +320,7 @@ def create_linux_application_entry(project_root: str | Path) -> Path:
         f"Comment={APP_DESCRIPTION}",
         f"Exec={exec_line}",
         f"TryExec={try_exec}",
+        f"Path={root}",
         "Terminal=false",
         "Categories=Office;Development;Utility;",
         "StartupNotify=true",
@@ -337,6 +407,7 @@ def register_windows_application(project_root: str | Path) -> str:
             "Cannot create the Windows Start Menu shortcut: PowerShell was not found"
         )
 
+    icon = _find_windows_icon(root)
     shortcut_env = os.environ.copy()
     shortcut_env.update(
         {
@@ -347,6 +418,10 @@ def register_windows_application(project_root: str | Path) -> str:
             "HEICHALOT_DESCRIPTION": APP_DESCRIPTION,
         }
     )
+    icon_line = ""
+    if icon is not None:
+        shortcut_env["HEICHALOT_ICON"] = str(icon)
+        icon_line = "$shortcut.IconLocation = $env:HEICHALOT_ICON; "
     powershell_script = (
         "$shell = New-Object -ComObject WScript.Shell; "
         "$shortcut = $shell.CreateShortcut($env:HEICHALOT_SHORTCUT); "
@@ -354,7 +429,8 @@ def register_windows_application(project_root: str | Path) -> str:
         "$shortcut.Arguments = $env:HEICHALOT_ARGUMENTS; "
         "$shortcut.WorkingDirectory = $env:HEICHALOT_WORKDIR; "
         "$shortcut.Description = $env:HEICHALOT_DESCRIPTION; "
-        "$shortcut.Save()"
+        + icon_line
+        + "$shortcut.Save()"
     )
     subprocess.run(
         [powershell, "-NoProfile", "-NonInteractive", "-Command", powershell_script],
@@ -465,6 +541,24 @@ def set_default(cfg: configparser.ConfigParser, section: str, option: str, value
         cfg.set(section, option, value)
 
 
+def module_enabled(
+    cfg: configparser.ConfigParser,
+    name: str,
+    fallback: str = "True",
+) -> bool:
+    """Return True when the optional module NAME is enabled.
+
+    The switch lives in the [modules] section of the config file, e.g.:
+
+        [modules]
+        rvcrypto = True
+
+    It can be changed at setup time or by editing the config file later.
+    """
+    value = get_value(cfg, "modules", name, fallback)
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def build_default_config(
     *,
     project_root: Optional[Path] = None,
@@ -526,10 +620,15 @@ def build_default_config(
         "image_mode": "move",
     }
 
+    cfg["modules"] = {
+        # Optional rvcrypto crypto analysis tools.
+        "rvcrypto": "True",
+    }
+
     return cfg
 
 def template_dir() -> Path:
-    return Path(__file__).resolve().parent / "templates"
+    return CONFIG_DIR / "templates"
 
 
 def config_template_path() -> Path:
@@ -589,6 +688,7 @@ def install_initial_config(
     *,
     project_root: Optional[Path] = None,
     data_dir: Optional[Path] = None,
+    rvcrypto: bool = True,
 ) -> configparser.ConfigParser:
     """Create the initial config without prompting.
 
@@ -606,6 +706,7 @@ def install_initial_config(
         data_dir=data_root,
     )
     ensure_config_defaults(cfg)
+    cfg.set("modules", "rvcrypto", "True" if rvcrypto else "False")
     write_config(cfg, cfg_path)
     ensure_directories(cfg, cfg_path)
     return cfg
@@ -670,11 +771,18 @@ def run_first_time_setup(config_path: Optional[Path] = None) -> configparser.Con
         default_project_root,
     )
 
+    crypto_enabled = Confirm.ask(
+        "Enable the optional rvcrypto crypto analysis tools?",
+        default=True,
+    )
+
     if existing:
         if not cfg.has_section("cms"):
             cfg.add_section("cms")
         if not cfg.has_section("paths"):
             cfg.add_section("paths")
+        if not cfg.has_section("modules"):
+            cfg.add_section("modules")
 
         cfg.set("cms", "project_root", str(project_root))
         cfg.set("cms", "cms_dir", str(cms_dir))
@@ -682,6 +790,8 @@ def run_first_time_setup(config_path: Optional[Path] = None) -> configparser.Con
         cfg.set("paths", "data_dir", str(data_dir))
         cfg.set("paths", "download_dir", str(data_dir / "downloads"))
         cfg.set("paths", "cache_dir", str(data_dir / "cache"))
+
+        cfg.set("modules", "rvcrypto", "True" if crypto_enabled else "False")
 
         ensure_config_defaults(cfg)
     else:
@@ -691,11 +801,17 @@ def run_first_time_setup(config_path: Optional[Path] = None) -> configparser.Con
             data_dir=data_dir,
         )
 
+        cfg.set("modules", "rvcrypto", "True" if crypto_enabled else "False")
+
     table = Table(show_header=False, box=None)
     table.add_row("config", str(cfg_path))
     table.add_row("project", str(project_root))
     table.add_row("cms_dir", str(cms_dir))
     table.add_row("data_dir", str(data_dir))
+    table.add_row(
+        "rvcrypto",
+        "enabled" if crypto_enabled else "disabled",
+    )
 
     console.print()
     console.print(
