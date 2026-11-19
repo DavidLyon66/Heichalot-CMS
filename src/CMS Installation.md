@@ -12,45 +12,69 @@
 
 ### 1.1 System packages (GUI backend)
 
-The desktop app uses **pywebview** with a Qt or GTK backend. Install the system-level dependencies:
+The desktop app uses **pywebview** with the Qt backend on Linux. The Python
+packages are installed into a local environment by the installer below; the
+system only needs the libraries Qt loads at runtime.
+
+The easiest path is:
 
 ```bash
-# Qt backend (recommended — best looking)
-sudo apt install python3-pyqt5 python3-pyqt5.qtwebengine
-
-# OR GTK backend (fallback)
-sudo apt install python3-gi python3-gi-cairo gir1.2-webkit2-4.1
+bash install_linux.sh --system-deps
 ```
 
-> Only **one** backend is needed. Qt is preferred; install GTK only if Qt does not work on your system.
+That installs the Qt/X11 libraries with `apt` on Debian/Ubuntu/Linux Mint (and
+the equivalent package names on Fedora, Arch, and openSUSE).
+
+To do it manually on Debian/Ubuntu/Mint:
+
+```bash
+sudo apt install python3-venv python3-pip \
+  libgl1 libegl1 libxkbcommon-x11-0 \
+  libxcb-cursor0 libxcb-xinerama0 libxcb-icccm4 \
+  libxcb-image0 libxcb-keysyms1 libxcb-render-util0 \
+  libxcb-shape0 libxcb-xfixes0 \
+  libdbus-1-3 libnss3 libxcomposite1 libxdamage1 \
+  libxrandr2 libxtst6 libgbm1 libxshmfence1 libasound2
+```
+
+> Only the Qt backend is used on Linux. Install the GTK packages only if you
+> deliberately switch pywebview to GTK.
 
 ### 1.2 Python dependencies
 
 From the project root:
 
 ```bash
-pip install -e ".[desktop]"
+bash install_linux.sh
 ```
 
-This installs Flask, pywebview, Markdown, PyYAML, and the other runtime deps.
+This detects `uv`, `venv` + `pip`, or `conda` / `mamba` / `micromamba`,
+creates `.venv-linux` (or `.conda-linux`), installs `src/requirements.txt`,
+and runs the first-time configuration.
+
+To do it manually:
+
+```bash
+python3 -m venv .venv-linux
+.venv-linux/bin/python -m pip install -r src/requirements.txt
+.venv-linux/bin/python tools/config.py --setup
+```
+
+This installs Flask, pywebview, the Qt bindings, PyYAML, and the other runtime
+deps.
 
 ### 1.3 Download CMS content
 
 ```bash
-heichalot-update --flush
+.venv-linux/bin/python tools/updatecms.py --flush
 ```
 
 This fetches the latest content archive from `https://heichalot.tech/cms/` and builds the local `content.db`.
 
-> If the remote server is unreachable, you can seed the database from a local archive:
-> ```bash
-> python3 tools/seed-from-zip.py /path/to/cms-update-2026-06-25.zip
-> ```
-
 ### 1.4 Run
 
 ```bash
-python3 src/heichalot-cms.py
+.venv-linux/bin/python src/heichalot-cms.py
 ```
 
 The GUI window will appear at 1280×850. The Flask server runs on `http://127.0.0.1:8765`.
@@ -58,7 +82,7 @@ The GUI window will appear at 1280×850. The Flask server runs on `http://127.0.
 To run the Flask server **without** the GUI window (e.g. for testing, or to access via browser):
 
 ```bash
-HEICHALOT_NO_GUI=1 python3 src/heichalot-cms.py
+HEICHALOT_NO_GUI=1 .venv-linux/bin/python src/heichalot-cms.py
 ```
 
 ---
@@ -71,22 +95,37 @@ Install **Python 3.10+** from [python.org](https://python.org). Ensure **"Add Py
 
 ### 2.2 Python dependencies
 
-Open **Command Prompt** or **PowerShell** in the project root:
+Open **Command Prompt** or **PowerShell** in the project root and run the
+installer, which creates a local `.venv-win` and installs the requirements:
+
+```bat
+install_windows.bat
+```
+
+To install without running the first-time configuration:
+
+```bat
+install_windows.bat --no-setup
+```
+
+To do it manually:
 
 ```powershell
-pip install -e ".[desktop]"
+python -m venv .venv-win
+.venv-win\Scripts\python.exe -m pip install -r src\requirements.txt
+.venv-win\Scripts\python.exe tools\config.py --setup
 ```
 
 ### 2.3 Known Windows issues
 
-- **PyQtWebEngine** may need a separate install: `pip install PyQtWebEngine`
-- If you see `ModuleNotFoundError: No module named 'PyQt5'`, run: `pip install PyQt5`
-- If the GUI window is blank, try the GTK backend (requires MSYS2 or Cygwin — not recommended). Prefer Qt on Windows.
+- Windows uses the built-in **EdgeChromium (WebView2)** backend, so the Qt
+  bindings are not needed.
+- If the GUI window is blank, install the **WebView2 Runtime** from Microsoft.
 
 ### 2.4 Run
 
 ```powershell
-python src\heichalot-cms.py
+.venv-win\Scripts\python.exe src\heichalot-cms.py
 ```
 
 ---
@@ -108,21 +147,27 @@ A clean compile without errors means all imports resolve correctly.
 |---|---|
 | `qtpy.QtModuleNotInstalledError: The QtWebEngineCore module was not found` | `pip install PyQtWebEngine` |
 | `Namespace WebKit2 not available` | Install GTK packages (see 1.1) or switch to Qt backend |
-| `sqlite3.OperationalError: no such table: entries` | Run `heichalot-update --flush` to download content |
+| `sqlite3.OperationalError: no such table: entries` | Run `.venv-linux/bin/python tools/updatecms.py --flush` to download content |
+| `ensurepip is not available` when creating a venv | `sudo apt install python3-venv` (Debian/Ubuntu/Mint) |
 | `ModuleNotFoundError: No module named 'webview'` | `pip install pywebview` |
 | `ModuleNotFoundError: No module named 'yaml'` | `pip install pyyaml` |
 
 ## 5. Updating content
 
+From a source checkout:
+
 ```bash
-heichalot-update
+.venv-linux/bin/python tools/updatecms.py
 ```
 
 To force a full re-download:
 
 ```bash
-heichalot-update --flush
+.venv-linux/bin/python tools/updatecms.py --flush
 ```
+
+> If the package is installed (for example with `pip install -e .`), the
+> `heichalot-update` command is equivalent.
 
 ---
 
